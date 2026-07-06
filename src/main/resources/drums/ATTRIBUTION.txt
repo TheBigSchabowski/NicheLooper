@@ -1,0 +1,9 @@
+Drum samples from "The Black Pearl 1.0" Hydrogen drumkit
+Author: Glen MacArthur (AVL Drumkits)
+License: GPL
+Source: https://sourceforge.net/projects/hydrogen/files/Sound%20Libraries/Main%20sound%20libraries/
+
+Files (converted to 48 kHz mono float32 raw, trimmed and peak-normalized):
+  kick.raw  <- PearlKick-Hard.wav
+  snare.raw <- PearlSnare-Hard.wav
+  hat.raw   <- SabianHatClosed-Med.wav

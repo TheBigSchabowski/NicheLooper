@@ -1,0 +1,4 @@
+-std=c++17
+-IJAVA_HOME/include
+-IJAVA_HOME/include/darwin
+-Inative
