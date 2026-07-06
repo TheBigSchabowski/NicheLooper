@@ -53,7 +53,7 @@ val buildNative = tasks.register<Exec>("buildNative") {
     )
     val outputFile = nativeResourceDir.get().file("native/libnichelooper.dylib").asFile
 
-    inputs.files(fileTree("native") { include("*.cpp", "*.h") })
+    inputs.files(fileTree("native") { include("*.cpp", "*.h", "*.mm") })
     outputs.file(outputFile)
 
     doFirst { outputFile.parentFile.mkdirs() }
