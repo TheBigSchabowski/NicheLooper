@@ -121,10 +121,16 @@ void closeEditorWindow(AudioComponentInstance unit) {
             return;
         }
         NSWindow* window = it->second;
-        window.contentView = nil;
-        [window close];
-        [window release];
         windows.erase(it);
+        @autoreleasepool {
+            // Close the window FIRST (sends windowWillClose: notifications
+            // while the plugin view is still alive), THEN release the view.
+            // Releasing contentView before [window close] caused JUCE plugin
+            // views to receive notifications on a freed object.
+            [window close];              // hide + notify (view still alive)
+            window.contentView = nil;   // release the plugin view
+            [window release];            // release the window
+        }
     });
 }
 
@@ -138,10 +144,32 @@ public:
     ~AuPlugin() {
         if (mUnit != nullptr) {
             closeEditorWindow(mUnit);
-            if (mInitialized) {
-                AudioUnitUninitialize(mUnit);
-            }
-            AudioComponentInstanceDispose(mUnit);
+            // Defer AU teardown to the NEXT main-thread run-loop iteration.
+            //
+            // JUCE-based AU plugins (Neural DSP Archetype, etc.) autorelease
+            // objects (views, message-manager resources, timers …) that
+            // reference the AudioComponentInstance. Those objects sit in the
+            // current autorelease pool.  If we Uninitialize/Dispose the AU
+            // right now, the next pool drain (end of this run-loop iteration)
+            // releases those objects — which then dereference the already-
+            // freed AU → EXC_BAD_ACCESS → JVM signal handler → abort().
+            //
+            // By deferring to dispatch_async, the current pool drains FIRST
+            // (releasing the autoreleased objects while the AU is still
+            // alive), and only on the following iteration do we tear it down.
+            // This is what fixes the "close a plugin twice → crash" bug.
+            AudioComponentInstance unit = mUnit;
+            bool initialized = mInitialized;
+            mUnit = nullptr;
+            mInitialized = false;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                @autoreleasepool {
+                    if (initialized) {
+                        AudioUnitUninitialize(unit);
+                    }
+                    AudioComponentInstanceDispose(unit);
+                }
+            });
         }
     }
 
