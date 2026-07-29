@@ -91,13 +91,42 @@ object AudioEngine {
     fun setInputGain(gain: Float) = nativeSetInputGain(gain)
     fun setOutputGain(gain: Float) = nativeSetOutputGain(gain)
 
-    // Rhythm section (metronome click + drum machine; 4/4, 3/4 or 6/8).
+    // Rhythm section (metronome click + drum machine).
     fun setBpm(bpm: Int) = nativeSetBpm(bpm)
     fun setMetronome(enabled: Boolean) = nativeSetMetronome(enabled)
     fun setDrums(enabled: Boolean) = nativeSetDrums(enabled)
 
-    /** 0 = 4/4, 1 = 3/4, 2 = 6/8. */
+    /**
+     * Silences the drums while the bar clock keeps running — a live "drop
+     * out for a bar" gesture. Unmuting re-enters the groove at the current
+     * step, so it always lands in time. Hits already sounding ring out; the
+     * metronome is not affected.
+     */
+    fun setDrumsMuted(muted: Boolean) = nativeSetDrumsMuted(muted)
+
+    /** Index into [RhythmTables.timeSignatureNames]; sets bar length + accents. */
     fun setTimeSignature(index: Int) = nativeSetTimeSignature(index)
+
+    /**
+     * Index into [RhythmTables.grooveNames] — the drum pattern played inside
+     * the bar. A groove written for a different signature than the current
+     * one is ignored by the engine (it falls back to that signature's first
+     * groove), so the two calls can be made in either order.
+     */
+    fun setGroove(index: Int) = nativeSetGroove(index)
+
+    /**
+     * The engine's built-in signature and groove tables. Constant, but read
+     * from native so the UI cannot drift out of sync with RhythmSection.cpp.
+     * Safe to call before start().
+     */
+    fun rhythmTables(): RhythmTables = RhythmTables(
+        timeSignatureNames = nativeGetTimeSignatureNames().toList(),
+        beatsPerBar = nativeGetBeatsPerBar().toList(),
+        grooveNames = nativeGetGrooveNames().toList(),
+        grooveTimeSignature = nativeGetGrooveTimeSignatures().toList(),
+    )
+
     fun setRhythmVolume(volume: Float) = nativeSetRhythmVolume(volume)
     fun setCountIn(enabled: Boolean) = nativeSetCountIn(enabled)
 
@@ -178,7 +207,13 @@ object AudioEngine {
     private external fun nativeSetBpm(bpm: Int)
     private external fun nativeSetMetronome(enabled: Boolean)
     private external fun nativeSetDrums(enabled: Boolean)
+    private external fun nativeSetDrumsMuted(muted: Boolean)
     private external fun nativeSetTimeSignature(index: Int)
+    private external fun nativeSetGroove(index: Int)
+    private external fun nativeGetTimeSignatureNames(): Array<String>
+    private external fun nativeGetBeatsPerBar(): IntArray
+    private external fun nativeGetGrooveNames(): Array<String>
+    private external fun nativeGetGrooveTimeSignatures(): IntArray
     private external fun nativeSetRhythmVolume(volume: Float)
     private external fun nativeSetCountIn(enabled: Boolean)
     private external fun nativeSetLoopVolume(volume: Float)

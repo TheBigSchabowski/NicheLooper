@@ -109,24 +109,120 @@ void resampleAndScale(std::vector<float>& dst, const std::vector<float>& src,
 
 }  // namespace
 
-// Step bit i (1 << i) = 16th note i of the bar. One groove per signature.
-// Hats outside hatAccent play soft, which is what keeps the pulse from
-// sounding mechanical.
 const RhythmSection::TimeSignature
         RhythmSection::kTimeSignatures[RhythmSection::kNumTimeSignatures] = {
-    // 4/4: kick 1 & 3, snare 2 & 4, hats in 8ths accented on the quarters
-    {4, 16, 4, /*kick*/ 0x0101, /*snare*/ 0x1010,
-     /*hat*/ 0x5555, /*hatAccent*/ 0x1111, /*mid*/ 0},
-    // 3/4 waltz (boom-chick-chick): kick on 1, snare on 2 & 3, hats only
-    // on the beats — 8th hats in between blurred the feel.
-    {3, 12, 4, /*kick*/ 0x001, /*snare*/ 0x110,
-     /*hat*/ 0x111, /*hatAccent*/ 0x001, /*mid*/ 0},
-    // 6/8: kick on 1, snare on 4, hats on every 8th accented on 1 and 4
-    // (the two pulses of compound meter — an extra kick before the snare
-    // was tried and rejected). Metronome: primary accent 1, secondary 4.
-    {6, 12, 2, /*kick*/ 0x001, /*snare*/ 0x040,
-     /*hat*/ 0x555, /*hatAccent*/ 0x041, /*mid*/ 0x040},
+    {"4/4", 4},
+    {"3/4", 3},
+    {"2/4", 2},
+    {"6/8", 6},  // BPM counts eighths here
 };
+
+// Grooves, grouped by time signature (the UI filters on Groove::timeSig, so
+// the order within a signature is the order of the dropdown). Step bit i
+// (1 << i) = step i of the bar at that groove's own resolution: stepsPerBeat
+// 4 = 16ths, 3 = 8th triplets (shuffle), 2 = the eighths of compound meter.
+// A step present in the pattern but missing from its accent mask plays soft.
+const RhythmSection::Groove RhythmSection::kGrooves[RhythmSection::kNumGrooves] = {
+    // ---- 4/4, 16 steps: beats on 0, 4, 8, 12 ----
+    // Kick 1 & 3, snare 2 & 4, hats in 8ths accented on the quarters.
+    {"Rock", 0, 16, 4,
+     /*kick*/ 0x0101, 0x0101, /*snare*/ 0x1010, 0x1010,
+     /*hat*/ 0x5555, 0x1111, /*mid*/ 0},
+    // Adds the kick on the "and" of 3 — the everyday pop push.
+    {"Pop", 0, 16, 4,
+     /*kick*/ 0x0501, 0x0501, /*snare*/ 0x1010, 0x1010,
+     /*hat*/ 0x5555, 0x1111, /*mid*/ 0},
+    // Same backbeat, hats in 16ths: drives without changing the feel.
+    {"Straight 16", 0, 16, 4,
+     /*kick*/ 0x0101, 0x0101, /*snare*/ 0x1010, 0x1010,
+     /*hat*/ 0xFFFF, 0x5555, /*mid*/ 0},
+    // Syncopated kick plus ghost snares on the "e" of 2 and the "a" of 4;
+    // only the downbeat hats are accented, which is what makes it funk.
+    {"Funk", 0, 16, 4,
+     /*kick*/ 0x0409, 0x0409, /*snare*/ 0x5090, 0x1010,
+     /*hat*/ 0xFFFF, 0x1111, /*mid*/ 0},
+    // Half-time: kick 1, snare 3. Room to breathe under a slow loop.
+    {"Ballad", 0, 16, 4,
+     /*kick*/ 0x0001, 0x0001, /*snare*/ 0x0100, 0x0100,
+     /*hat*/ 0x5555, 0x1111, /*mid*/ 0},
+    // Kick on every quarter, hats accented on the offbeats (disco/house).
+    {"Four on the Floor", 0, 16, 4,
+     /*kick*/ 0x1111, 0x1111, /*snare*/ 0x1010, 0x1010,
+     /*hat*/ 0x5555, 0x4444, /*mid*/ 0},
+    // Triplet grid: 12 steps = 4 beats x 3. Hats long-short per beat.
+    {"Shuffle", 0, 12, 3,
+     /*kick*/ 0x041, 0x041, /*snare*/ 0x208, 0x208,
+     /*hat*/ 0xB6D, 0x249, /*mid*/ 0},
+    // Bossa: surdo-ish kick, clave on the snare kept entirely ghosted so it
+    // reads as a rim click rather than a backbeat.
+    {"Bossa", 0, 16, 4,
+     /*kick*/ 0x4141, 0x4141, /*snare*/ 0x1448, 0x0000,
+     /*hat*/ 0x5555, 0x1111, /*mid*/ 0},
+
+    // ---- 3/4, 12 steps: beats on 0, 4, 8 ----
+    // Boom-chick-chick. Hats only on the beats — 8ths in between blurred it.
+    {"Waltz", 1, 12, 4,
+     /*kick*/ 0x001, 0x001, /*snare*/ 0x110, 0x110,
+     /*hat*/ 0x111, 0x001, /*mid*/ 0},
+    // Hats in 8ths, beat 2 ghosted so beat 3 lifts.
+    {"Jazz Waltz", 1, 12, 4,
+     /*kick*/ 0x001, 0x001, /*snare*/ 0x110, 0x100,
+     /*hat*/ 0x555, 0x111, /*mid*/ 0},
+    // Just 1 and 3 — the sparse version for slow 3/4.
+    {"Waltz Ballad", 1, 12, 4,
+     /*kick*/ 0x001, 0x001, /*snare*/ 0x100, 0x100,
+     /*hat*/ 0x555, 0x111, /*mid*/ 0},
+
+    // ---- 2/4, 8 steps: beats on 0, 4 ----
+    {"March", 2, 8, 4,
+     /*kick*/ 0x01, 0x01, /*snare*/ 0x10, 0x10,
+     /*hat*/ 0x55, 0x11, /*mid*/ 0},
+    // Kick on both beats, snare on the offbeats.
+    {"Polka", 2, 8, 4,
+     /*kick*/ 0x11, 0x11, /*snare*/ 0x44, 0x44,
+     /*hat*/ 0x55, 0x11, /*mid*/ 0},
+    // 16th hats: a fast 2/4 punk/train feel.
+    {"2/4 Rock", 2, 8, 4,
+     /*kick*/ 0x01, 0x01, /*snare*/ 0x10, 0x10,
+     /*hat*/ 0xFF, 0x55, /*mid*/ 0},
+
+    // ---- 6/8, 12 steps: the six eighths on 0, 2, 4, 6, 8, 10 ----
+    // Kick on 1, snare on 4, hats accented on the two pulses of compound
+    // meter (an extra kick before the snare was tried and rejected).
+    // Metronome: primary accent on 1, secondary on 4.
+    {"6/8 Basic", 3, 12, 2,
+     /*kick*/ 0x001, 0x001, /*snare*/ 0x040, 0x040,
+     /*hat*/ 0x555, 0x041, /*mid*/ 0x040},
+    // All twelve subdivisions on the hat plus a pickup kick: 12/8 blues.
+    {"6/8 Blues", 3, 12, 2,
+     /*kick*/ 0x021, 0x021, /*snare*/ 0x040, 0x040,
+     /*hat*/ 0xFFF, 0x041, /*mid*/ 0x040},
+    // Kick on the two pulses, snare filling the eighths after each of them
+    // with the second one ghosted — that lilt is what makes it a march.
+    {"6/8 March", 3, 12, 2,
+     /*kick*/ 0x041, 0x041, /*snare*/ 0x514, 0x104,
+     /*hat*/ 0x555, 0x041, /*mid*/ 0x040},
+};
+
+const char* RhythmSection::timeSignatureName(int32_t index) {
+    if (index < 0 || index >= kNumTimeSignatures) return "";
+    return kTimeSignatures[index].name;
+}
+
+int32_t RhythmSection::beatsPerBar(int32_t timeSignatureIndex) {
+    if (timeSignatureIndex < 0 || timeSignatureIndex >= kNumTimeSignatures) return 4;
+    return kTimeSignatures[timeSignatureIndex].beatsPerBar;
+}
+
+const char* RhythmSection::grooveName(int32_t index) {
+    if (index < 0 || index >= kNumGrooves) return "";
+    return kGrooves[index].name;
+}
+
+int32_t RhythmSection::grooveTimeSignature(int32_t index) {
+    if (index < 0 || index >= kNumGrooves) return 0;
+    return kGrooves[index].timeSig;
+}
 
 void RhythmSection::prepare(int32_t sampleRate) {
     mSampleRate = sampleRate;
@@ -149,9 +245,13 @@ void RhythmSection::prepare(int32_t sampleRate) {
     synthClick(mClickNormal, sampleRate, 1046.5f, 0.35f);  // C6, plain
     mClickBuf = &mClickNormal;
     mClickPos = mKickPos = mSnarePos = mHatPos = -1;
-    mHatGain = 1.0f;
+    mKickGain = mSnareGain = mHatGain = 1.0f;
     mLastStep = -1;
+    mLastStepsPerBar = 0;
     mSig = &kTimeSignatures[0];
+    mGroove = &kGrooves[0];
+    mCachedSigIndex = -1;
+    mCachedGrooveIndex = -1;
 }
 
 void RhythmSection::setDrumSamples(std::vector<float> kick, std::vector<float> snare,
@@ -169,8 +269,29 @@ void RhythmSection::setBpm(int32_t bpm) {
 RhythmParams RhythmSection::beginBlock() {
     const int32_t sigIndex =
             std::clamp(mTimeSigIndex.load(std::memory_order_relaxed), 0, kNumTimeSignatures - 1);
-    mSig = &kTimeSignatures[sigIndex];
+    const int32_t grooveIndex =
+            std::clamp(mGrooveIndex.load(std::memory_order_relaxed), 0, kNumGrooves - 1);
+    // Resolving the pair means a linear scan, so only redo it when the user
+    // actually changed something — every other block just reuses the cache.
+    if (sigIndex != mCachedSigIndex || grooveIndex != mCachedGrooveIndex) {
+        mCachedSigIndex = sigIndex;
+        mCachedGrooveIndex = grooveIndex;
+        mSig = &kTimeSignatures[sigIndex];
+        mGroove = &kGrooves[grooveIndex];
+        if (mGroove->timeSig != sigIndex) {
+            // Mismatched pair (e.g. the signature changed first): play the
+            // signature's first groove rather than a pattern whose bar is a
+            // different length than the bar clock.
+            for (int32_t i = 0; i < kNumGrooves; ++i) {
+                if (kGrooves[i].timeSig == sigIndex) {
+                    mGroove = &kGrooves[i];
+                    break;
+                }
+            }
+        }
+    }
     mVolumeBlock = mVolume.load(std::memory_order_relaxed);
+    mDrumsMutedBlock = mDrumsMuted.load(std::memory_order_relaxed);
 
     RhythmParams p;
     const int32_t bpm = mBpm.load(std::memory_order_relaxed);
@@ -184,30 +305,48 @@ RhythmParams RhythmSection::beginBlock() {
 
 void RhythmSection::triggerStep(int32_t phaseFrames, int32_t framesPerBar,
                                 bool clicks, bool drums) {
-    if (framesPerBar <= 0 || mSig == nullptr) {
+    if (framesPerBar <= 0 || mGroove == nullptr) {
         return;
     }
+    const int32_t stepsPerBar = mGroove->stepsPerBar;
     int32_t step = static_cast<int32_t>(
-            static_cast<int64_t>(phaseFrames) * mSig->stepsPerBar / framesPerBar);
-    step = std::clamp(step, 0, mSig->stepsPerBar - 1);
+            static_cast<int64_t>(phaseFrames) * stepsPerBar / framesPerBar);
+    step = std::clamp(step, 0, stepsPerBar - 1);
+
+    if (stepsPerBar != mLastStepsPerBar) {
+        // Switching to a groove with a different resolution invalidates
+        // mLastStep (it counts in the old grid). Adopt the current step
+        // without firing it — one missed hit beats a double trigger.
+        mLastStepsPerBar = stepsPerBar;
+        if (mLastStep >= 0) {
+            mLastStep = step;
+            return;
+        }
+    }
     if (step == mLastStep) {
         return;
     }
     mLastStep = step;
 
     const uint16_t bit = static_cast<uint16_t>(1u << step);
-    if (clicks && step % mSig->stepsPerBeat == 0) {
-        mClickBuf = (step == 0)              ? &mClickAccent
-                    : (mSig->midAccent & bit) ? &mClickMid
-                                              : &mClickNormal;
+    if (clicks && step % mGroove->stepsPerBeat == 0) {
+        mClickBuf = (step == 0)                  ? &mClickAccent
+                    : (mGroove->midAccent & bit) ? &mClickMid
+                                                 : &mClickNormal;
         mClickPos = 0;
     }
-    if (drums) {
-        if (mSig->kick & bit) mKickPos = 0;
-        if (mSig->snare & bit) mSnarePos = 0;
-        if (mSig->hat & bit) {
+    if (drums && !mDrumsMutedBlock) {
+        if (mGroove->kick & bit) {
+            mKickPos = 0;
+            mKickGain = (mGroove->kickAccent & bit) ? 1.0f : 0.60f;
+        }
+        if (mGroove->snare & bit) {
+            mSnarePos = 0;
+            mSnareGain = (mGroove->snareAccent & bit) ? 1.0f : 0.32f;
+        }
+        if (mGroove->hat & bit) {
             mHatPos = 0;
-            mHatGain = (mSig->hatAccent & bit) ? 1.0f : 0.55f;
+            mHatGain = (mGroove->hatAccent & bit) ? 1.0f : 0.55f;
         }
     }
 }
@@ -220,11 +359,11 @@ float RhythmSection::render() {
         if (++mClickPos >= static_cast<int32_t>(buf.size())) mClickPos = -1;
     }
     if (mKickPos >= 0) {
-        sample += mKick[mKickPos];
+        sample += mKick[mKickPos] * mKickGain;
         if (++mKickPos >= static_cast<int32_t>(mKick.size())) mKickPos = -1;
     }
     if (mSnarePos >= 0) {
-        sample += mSnare[mSnarePos];
+        sample += mSnare[mSnarePos] * mSnareGain;
         if (++mSnarePos >= static_cast<int32_t>(mSnare.size())) mSnarePos = -1;
     }
     if (mHatPos >= 0) {

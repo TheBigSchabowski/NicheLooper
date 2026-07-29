@@ -108,10 +108,11 @@ void LooperEngine::finalizeLoopQuantized(const RhythmParams& rp) {
 
 void LooperEngine::startRecording(const RhythmParams& rp) {
     // Bar phase of whatever rhythm clock is currently audible; -1 = none.
-    // Recording must start on THAT clock's bar line, not at the button
-    // press: the press lands somewhere mid-bar, and restarting the grid
-    // there shifts the drums by the press offset and makes an auto-closed
-    // loop end early relative to what the player hears.
+    // Without a count-in, recording must start on THAT clock's bar line and
+    // the grid must keep its place: the press lands somewhere mid-bar, and
+    // restarting the grid there shifts the drums by the press offset and
+    // makes an auto-closed loop end early relative to what the player hears.
+    // (With a count-in the grid is deliberately restarted instead — below.)
     int32_t gridPhase = -1;
     if ((rp.metronome || rp.drums) && rp.framesPerBar > 0) {
         const LooperState s = state();
@@ -133,21 +134,29 @@ void LooperEngine::startRecording(const RhythmParams& rp) {
     const bool countIn =
             mCountInEnabled.load(std::memory_order_relaxed) && rp.framesPerBar > 0;
     int32_t wait = 0;
-    if (gridPhase >= 0) {
-        // Sync to the running clock: finish the current bar, plus one full
-        // count-in bar if enabled (so the lead-in is between 1 and 2 bars).
+    int32_t startPhase = 0;
+    if (countIn) {
+        // Always two WHOLE bars, and the grid restarts at the press. Letting
+        // a running clock finish its bar first made the lead-in "one and a
+        // bit" bars — pressing mid-bar counted you in from beat 3. Recording
+        // still begins on beat 1, because two bars later the grid is back
+        // at phase 0 by construction.
+        wait = 2 * rp.framesPerBar;
+        startPhase = 0;
+        // The jump to phase 0 can land on the step the sequencer is already
+        // on; clear it so the downbeat is guaranteed to sound.
+        mRhythm.resetStepTracking();
+    } else if (gridPhase >= 0) {
+        // No count-in: just finish the running bar so recording starts on
+        // the bar line the player hears, grid untouched.
         wait = (rp.framesPerBar - gridPhase) % rp.framesPerBar;
-        if (countIn) {
-            wait += rp.framesPerBar;
-        }
-    } else if (countIn) {
-        wait = 2 * rp.framesPerBar;  // no clock running: two full bars
+        startPhase = gridPhase;
     }
 
     if (wait > 0) {
         mCountInPos = 0;
         mCountInTarget = wait;
-        mCountInPhase = std::max(gridPhase, 0);
+        mCountInPhase = startPhase;
         mCountInClicks = countIn;  // a pure bar-line wait adds no clicks
         setState(LooperState::CountIn);
     } else {

@@ -189,9 +189,68 @@ Java_nichelooper_audio_AudioEngine_nativeSetDrums(
 }
 
 JNIEXPORT void JNICALL
+Java_nichelooper_audio_AudioEngine_nativeSetDrumsMuted(
+        JNIEnv* /*env*/, jobject /*thiz*/, jboolean muted) {
+    gEngine.looper().rhythm().setDrumsMuted(muted == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
 Java_nichelooper_audio_AudioEngine_nativeSetTimeSignature(
         JNIEnv* /*env*/, jobject /*thiz*/, jint index) {
     gEngine.looper().rhythm().setTimeSignature(index);
+}
+
+JNIEXPORT void JNICALL
+Java_nichelooper_audio_AudioEngine_nativeSetGroove(
+        JNIEnv* /*env*/, jobject /*thiz*/, jint index) {
+    gEngine.looper().rhythm().setGroove(index);
+}
+
+// The four calls below read compile-time tables, not engine state, so they
+// work before start() — the UI builds its menus from them.
+
+JNIEXPORT jobjectArray JNICALL
+Java_nichelooper_audio_AudioEngine_nativeGetTimeSignatureNames(
+        JNIEnv* env, jobject /*thiz*/) {
+    std::vector<std::string> names;
+    names.reserve(RhythmSection::kNumTimeSignatures);
+    for (int32_t i = 0; i < RhythmSection::kNumTimeSignatures; ++i) {
+        names.emplace_back(RhythmSection::timeSignatureName(i));
+    }
+    return toStringArray(env, names);
+}
+
+JNIEXPORT jintArray JNICALL
+Java_nichelooper_audio_AudioEngine_nativeGetBeatsPerBar(JNIEnv* env, jobject /*thiz*/) {
+    jint beats[RhythmSection::kNumTimeSignatures];
+    for (int32_t i = 0; i < RhythmSection::kNumTimeSignatures; ++i) {
+        beats[i] = RhythmSection::beatsPerBar(i);
+    }
+    jintArray result = env->NewIntArray(RhythmSection::kNumTimeSignatures);
+    env->SetIntArrayRegion(result, 0, RhythmSection::kNumTimeSignatures, beats);
+    return result;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_nichelooper_audio_AudioEngine_nativeGetGrooveNames(JNIEnv* env, jobject /*thiz*/) {
+    std::vector<std::string> names;
+    names.reserve(RhythmSection::kNumGrooves);
+    for (int32_t i = 0; i < RhythmSection::kNumGrooves; ++i) {
+        names.emplace_back(RhythmSection::grooveName(i));
+    }
+    return toStringArray(env, names);
+}
+
+JNIEXPORT jintArray JNICALL
+Java_nichelooper_audio_AudioEngine_nativeGetGrooveTimeSignatures(
+        JNIEnv* env, jobject /*thiz*/) {
+    jint sigs[RhythmSection::kNumGrooves];
+    for (int32_t i = 0; i < RhythmSection::kNumGrooves; ++i) {
+        sigs[i] = RhythmSection::grooveTimeSignature(i);
+    }
+    jintArray result = env->NewIntArray(RhythmSection::kNumGrooves);
+    env->SetIntArrayRegion(result, 0, RhythmSection::kNumGrooves, sigs);
+    return result;
 }
 
 JNIEXPORT void JNICALL

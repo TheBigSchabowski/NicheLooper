@@ -19,6 +19,7 @@ import nichelooper.audio.LoopLibrary
 import nichelooper.audio.LoopSaver
 import nichelooper.audio.LooperCommand
 import nichelooper.audio.LooperState
+import nichelooper.audio.RhythmTables
 import nichelooper.audio.SavedLoop
 
 data class TransportUiState(
@@ -42,7 +43,10 @@ data class TransportUiState(
     val bpm: Int = 120,
     val metronomeEnabled: Boolean = false,
     val drumsEnabled: Boolean = false,
-    val timeSignature: Int = 0,          // 0 = 4/4, 1 = 3/4, 2 = 6/8
+    val drumsMuted: Boolean = false,
+    val rhythm: RhythmTables = RhythmTables(),
+    val timeSignature: Int = 0,          // index into rhythm.timeSignatureNames
+    val groove: Int = 0,                 // index into rhythm.grooveNames
     val countInEnabled: Boolean = false,
     val rhythmVolume: Float = 1f,
     val loopVolume: Float = 1f,
@@ -82,6 +86,14 @@ class TransportViewModel {
             while (isActive) {
                 refreshDevices()
                 delay(DEVICE_POLL_MS)
+            }
+        }
+
+        // One-time read of the engine's signature/groove tables for the menus.
+        scope.launch {
+            val tables = runCatching { AudioEngine.rhythmTables() }.getOrNull()
+            if (tables != null) {
+                _uiState.update { it.copy(rhythm = tables) }
             }
         }
 
@@ -175,7 +187,9 @@ class TransportViewModel {
                     AudioEngine.setBpm(s.bpm)
                     AudioEngine.setMetronome(s.metronomeEnabled)
                     AudioEngine.setDrums(s.drumsEnabled)
+                    AudioEngine.setDrumsMuted(s.drumsMuted)
                     AudioEngine.setTimeSignature(s.timeSignature)
+                    AudioEngine.setGroove(s.groove)
                     AudioEngine.setCountIn(s.countInEnabled)
                     AudioEngine.setRhythmVolume(s.rhythmVolume)
                     AudioEngine.setLoopVolume(s.loopVolume)
@@ -461,9 +475,33 @@ class TransportViewModel {
         _uiState.update { it.copy(drumsEnabled = enabled) }
     }
 
+    /**
+     * Live drop-out: silences the drums but leaves the bar clock (and the
+     * loop) running, so unmuting re-enters the groove in time. Bound to M.
+     */
+    fun toggleDrumsMute() {
+        val muted = !_uiState.value.drumsMuted
+        AudioEngine.setDrumsMuted(muted)
+        _uiState.update { it.copy(drumsMuted = muted) }
+    }
+
+    /**
+     * Switching the meter also moves to that meter's first groove — a groove
+     * is written for one bar length, so keeping the old one would either be
+     * ignored by the engine or fight the bar clock.
+     */
     fun setTimeSignature(index: Int) {
+        val state = _uiState.value
+        if (index == state.timeSignature) return
+        val groove = state.rhythm.groovesFor(index).firstOrNull() ?: state.groove
         AudioEngine.setTimeSignature(index)
-        _uiState.update { it.copy(timeSignature = index) }
+        AudioEngine.setGroove(groove)
+        _uiState.update { it.copy(timeSignature = index, groove = groove) }
+    }
+
+    fun setGroove(index: Int) {
+        AudioEngine.setGroove(index)
+        _uiState.update { it.copy(groove = index) }
     }
 
     fun setCountIn(enabled: Boolean) {
