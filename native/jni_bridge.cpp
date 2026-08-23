@@ -1,6 +1,10 @@
 #include <jni.h>
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "MacAudioEngine.h"
@@ -363,6 +367,41 @@ Java_nichelooper_audio_AudioEngine_nativeLoadBank(
             reinterpret_cast<const uint8_t*>(ptr), static_cast<size_t>(len));
     env->ReleaseByteArrayElements(data, ptr, JNI_ABORT);
     return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+// ---- Process shutdown -----------------------------------------------------
+
+// Called from the JVM shutdown hook (every quit path: window close, Cmd+Q,
+// SIGTERM). Stops the audio device and then ends the process with _Exit(),
+// i.e. WITHOUT running atexit handlers and static destructors.
+//
+// Why the hard exit: hosted AU plugins keep their own threads running for the
+// whole session (JUCE-based ones — Neural DSP Archetypes & Co. — have a
+// "JUCE Timer" thread). A normal exit() runs __cxa_finalize, which tears down
+// the plugin bundles' globals underneath those still-live threads, while the
+// JVM has already parked the main thread at a safepoint — so the main run
+// loop no longer pumps and our own editor-window teardown (dispatch_sync)
+// would deadlock on top of it. The plugin thread then faults, the JVM signal
+// handler turns that into a fatal error report and macOS shows the
+// "NicheLooper quit unexpectedly" dialog on every single quit.
+//
+// Nothing of ours needs that teardown: loops and chain presets are written
+// only on explicit user action, and the OS reclaims audio device, memory and
+// windows. Stopping the device is the one step that must still happen
+// synchronously, so the CoreAudio callback is provably done first.
+JNIEXPORT void JNICALL
+Java_nichelooper_audio_AudioEngine_nativeShutdown(JNIEnv* /*env*/, jobject /*thiz*/) {
+    // Watchdog: should stop() ever block (CoreAudio hiccup, lock held by a
+    // start still in flight), quit anyway instead of hanging on the last
+    // window.
+    std::thread([] {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::_Exit(0);
+    }).detach();
+
+    gEngine.stop();
+    std::fflush(nullptr);
+    std::_Exit(0);
 }
 
 }  // extern "C"

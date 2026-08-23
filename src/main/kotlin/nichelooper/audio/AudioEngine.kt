@@ -14,6 +14,26 @@ object AudioEngine {
 
     init {
         loadNativeLibrary()
+        installShutdownHook()
+    }
+
+    /**
+     * Every JVM exit path (window close, Cmd+Q, SIGTERM) passes through this
+     * hook before the VM tears itself down. [nativeShutdown] stops the audio
+     * device and then ends the process with _Exit() — deliberately skipping
+     * the static destructors of the loaded AU plugin bundles.
+     *
+     * Without it, a normal exit() destroyed the plugin globals while the
+     * plugins' own worker threads were still running (and the main run loop
+     * had already stopped pumping), the JVM signal handler caught the fault
+     * and macOS showed the "NicheLooper quit unexpectedly" report on every
+     * quit. Nothing of ours needs the teardown: loops and presets are written
+     * only on explicit user action.
+     */
+    private fun installShutdownHook() {
+        Runtime.getRuntime().addShutdownHook(
+            Thread({ nativeShutdown() }, "nichelooper-shutdown"),
+        )
     }
 
     // The dylib is packaged as a classpath resource (built by the Gradle
@@ -24,8 +44,10 @@ object AudioEngine {
             ?: error("libnichelooper.dylib fehlt im Classpath — Gradle-Build ausführen (Task buildNative).")
         val temp = Files.createTempFile("libnichelooper", ".dylib")
         resource.use { input -> Files.newOutputStream(temp).use { output -> input.copyTo(output) } }
-        temp.toFile().deleteOnExit()
         System.load(temp.toAbsolutePath().toString())
+        // deleteOnExit would never run (see installShutdownHook), so unlink
+        // the copy right away — on macOS the loaded mapping stays valid.
+        runCatching { Files.deleteIfExists(temp) }
     }
 
     // ---- Device enumeration (indices are positions in the last refresh) ----
@@ -187,6 +209,7 @@ object AudioEngine {
     private external fun nativeGetDefaultOutputIndex(): Int
     private external fun nativeStart(inputIndex: Int, outputIndex: Int): Boolean
     private external fun nativeStop()
+    private external fun nativeShutdown()
     private external fun nativeIsRunning(): Boolean
     private external fun nativeIsDisconnected(): Boolean
     private external fun nativeSendCommand(command: Int)

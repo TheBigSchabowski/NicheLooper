@@ -32,6 +32,11 @@ public:
     // thread still fires the data callback → SIGSEGV. stop() uninits the
     // device synchronously, so the callback is provably finished before any
     // member dies.
+    //
+    // On the normal quit path this destructor no longer runs at all: the JVM
+    // shutdown hook calls nativeShutdown() (jni_bridge.cpp), which stops the
+    // device and then _Exit()s past every static destructor — see the comment
+    // there for why plugin teardown at process exit is not survivable.
     ~MacAudioEngine() { stop(); }
 
     // App thread: re-enumerates capture/playback devices. Returns false if
