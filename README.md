@@ -23,7 +23,7 @@ C++-Audio-Engine (miniaudio → CoreAudio) über JNI.
    bleiben, ohne dass macOS erneut fragt — siehe „Fehlerbehebung“.
 4. Input/Output-Gerät wählen, **START ENGINE** — loslegen.
 
-> Aktuelle Version: [**NicheLooper 1.1.1**](https://github.com/TheBigSchabowski/NicheLooper/releases)
+> Aktuelle Version: [**NicheLooper 1.1.1**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.1.1)
 > — `NicheLooper-1.1.1.dmg` direkt von der Releases-Seite laden.
 
 ### Für Entwickler (aus dem Quellcode)
