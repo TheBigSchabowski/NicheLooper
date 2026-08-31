@@ -19,17 +19,18 @@ C++-Audio-Engine (miniaudio → CoreAudio) über JNI.
 3. Beim ersten Start macOS-**Mikrofon-Zugriff** erlauben (sonst bleibt der
    Eingang stumm). Da die App nicht von Apple signiert/notarisiert ist,
    beim ersten Start ggf. *Systemeinstellungen → Datenschutz & Sicherheit →
-   „trotzdem öffnen“*.
+   „trotzdem öffnen“*. Nach einem **Update** kann der Eingang stumm
+   bleiben, ohne dass macOS erneut fragt — siehe „Fehlerbehebung“.
 4. Input/Output-Gerät wählen, **START ENGINE** — loslegen.
 
-> Aktuelle Version: [**NicheLooper 1.0.0**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.0.0)
-> — `NicheLooper-1.0.0.dmg` direkt von der Releases-Seite laden.
+> Aktuelle Version: [**NicheLooper 1.1.1**](https://github.com/TheBigSchabowski/NicheLooper/releases)
+> — `NicheLooper-1.1.1.dmg` direkt von der Releases-Seite laden.
 
 ### Für Entwickler (aus dem Quellcode)
 
 ```sh
 ./gradlew run          # App direkt aus dem Source starten
-./gradlew packageDmg   # → build/compose/binaries/main/dmg/NicheLooper-1.0.0.dmg
+./gradlew packageDmg   # → build/compose/binaries/main/dmg/NicheLooper-1.1.1.dmg
 ```
 
 Build-Voraussetzungen siehe Abschnitt „Starten (Entwicklung)“.
@@ -130,6 +131,36 @@ Amp-Sound auf; Umschalten ändert nur den Live-Sound, nie fertige Loops.
 - LOAD liest WAV **und** M4A — vom Handy kopierte `Loop_*.m4a` einfach in
   denselben Ordner legen (Konvertierung läuft über das mitgelieferte
   macOS-Tool `afconvert`).
+
+## Fehlerbehebung
+
+### Nach einem Update bleibt der Eingang stumm
+
+Symptom: Die Engine startet ohne Fehlermeldung (`inCh=1` in der Konsolen-
+Ausgabe), aber das **In**-Meter rührt sich nicht — und macOS fragt auch nicht
+nach dem Mikrofon.
+
+Ursache: Die App ist nur **ad-hoc signiert** (kein Apple-Developer-Zertifikat).
+macOS hängt die Mikrofon-Freigabe an die Code-Signatur des Bundles, und die
+ist bei jedem Build eine andere. Nach dem Ersetzen der App passt der alte
+Eintrag also nicht mehr — statt neu zu fragen, liefert macOS in dem Fall
+einfach Stille.
+
+Abhilfe: Freigabe zurücksetzen, App neu starten, Dialog erlauben.
+
+```sh
+tccutil reset Microphone com.example.nichelooper
+```
+
+Dauerhaft verschwindet das erst mit einer echten Developer-ID-Signatur plus
+Notarisierung — dann bleibt die Signatur über Versionen hinweg stabil.
+
+### Kein Signal, obwohl die Engine läuft
+
+Die Meter zeigen, wo es klemmt: **In** ist das rohe Signal vom Interface (vor
+der Chain), **FX** das Signal nach der Chain. Schlägt In aus und FX nicht,
+liegt es an der aktiven Plugin-Chain (Plugin ohne geladenes Preset, Output
+zugedreht) — nicht am Eingang. Bleibt schon In stumm, siehe oben.
 
 ## Lizenzen & Drittanbieter-Inhalte
 
