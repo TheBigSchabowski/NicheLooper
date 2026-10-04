@@ -1,10 +1,12 @@
 package nichelooper.audio
 
+import nichelooper.platform.Platform
 import java.nio.file.Files
 
 /**
- * Kotlin facade over the native (C++/miniaudio-CoreAudio) engine in
- * libnichelooper.dylib.
+ * Kotlin facade over the native C++/miniaudio engine in libnichelooper
+ * (.dylib on macOS with CoreAudio + Audio Units, .so on Linux with
+ * PulseAudio/ALSA/JACK + VST3).
  *
  * All calls are cheap: they either flip atomics read by the audio thread or
  * read atomics written by it. start()/stop() are the only heavy calls and
@@ -36,23 +38,25 @@ object AudioEngine {
         )
     }
 
-    // The dylib is packaged as a classpath resource (built by the Gradle
-    // buildNative task); extract it to a temp file so System.load works both
-    // from the exploded dev classpath and from a packaged jar/.app.
+    // The native library is packaged as a classpath resource (built by the
+    // Gradle buildNative task); extract it to a temp file so System.load works
+    // both from the exploded dev classpath and from a packaged jar/.app/.deb.
     private fun loadNativeLibrary() {
-        val resource = AudioEngine::class.java.getResourceAsStream("/native/libnichelooper.dylib")
-            ?: error("libnichelooper.dylib fehlt im Classpath — Gradle-Build ausführen (Task buildNative).")
-        val temp = Files.createTempFile("libnichelooper", ".dylib")
+        val extension = if (Platform.isMac) "dylib" else "so"
+        val fileName = "libnichelooper.$extension"
+        val resource = AudioEngine::class.java.getResourceAsStream("/native/$fileName")
+            ?: error("$fileName fehlt im Classpath — Gradle-Build ausführen (Task buildNative).")
+        val temp = Files.createTempFile("libnichelooper", ".$extension")
         resource.use { input -> Files.newOutputStream(temp).use { output -> input.copyTo(output) } }
         System.load(temp.toAbsolutePath().toString())
         // deleteOnExit would never run (see installShutdownHook), so unlink
-        // the copy right away — on macOS the loaded mapping stays valid.
+        // the copy right away — the loaded mapping stays valid on macOS and Linux.
         runCatching { Files.deleteIfExists(temp) }
     }
 
     // ---- Device enumeration (indices are positions in the last refresh) ----
 
-    /** Re-enumerates CoreAudio devices. Returns false if the context failed. */
+    /** Re-enumerates the audio devices. Returns false if the audio context failed. */
     fun refreshDevices(): Boolean = nativeRefreshDevices()
 
     val inputDeviceNames: List<String> get() = nativeGetInputDeviceNames().toList()
@@ -166,7 +170,7 @@ object AudioEngine {
     fun setDrumSamples(kick: FloatArray, snare: FloatArray, hat: FloatArray, sourceRate: Int) =
         nativeSetDrumSamples(kick, snare, hat, sourceRate)
 
-    // ---- Plugin chains (Audio Unit hosting) ----
+    // ---- Plugin chains (Audio Units on macOS, VST3 on Linux) ----
     // Three chains process the live input in front of the looper; the active
     // one is switched glitch-free (keys A/S/D). Plugin indices refer to the
     // most recent [effectPluginNames] enumeration.
@@ -175,6 +179,13 @@ object AudioEngine {
 
     fun chainAddPlugin(chain: Int, pluginIndex: Int): Boolean =
         nativeChainAddPlugin(chain, pluginIndex)
+
+    /**
+     * Linux only: loads a VST3 plugin from a `.vst3` bundle directory that is
+     * not in one of the standard search paths and appends it to the chain.
+     */
+    fun chainAddPluginFromPath(chain: Int, path: String): Boolean =
+        nativeChainAddPluginFromPath(chain, path)
 
     fun chainRemovePlugin(chain: Int, slot: Int): Boolean =
         nativeChainRemovePlugin(chain, slot)
@@ -196,7 +207,7 @@ object AudioEngine {
 
     // ---- Preset bank (all 3 chains) ----
 
-    /** Snapshots all 3 chains (plugin identity + full AU state, incl. NAM model) as bytes. */
+    /** Snapshots all 3 chains (plugin identity + full plugin state, incl. NAM model) as bytes. */
     fun saveBank(): ByteArray = nativeSaveBank()
 
     /** Replaces all 3 chains from a previously saved bank. Requires a running engine. */
@@ -249,6 +260,7 @@ object AudioEngine {
     )
     private external fun nativeGetEffectPluginNames(): Array<String>
     private external fun nativeChainAddPlugin(chain: Int, pluginIndex: Int): Boolean
+    private external fun nativeChainAddPluginFromPath(chain: Int, path: String): Boolean
     private external fun nativeChainRemovePlugin(chain: Int, slot: Int): Boolean
     private external fun nativeChainMovePlugin(chain: Int, from: Int, to: Int): Boolean
     private external fun nativeChainGetPluginNames(chain: Int): Array<String>

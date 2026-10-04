@@ -1,5 +1,6 @@
 package nichelooper.audio
 
+import nichelooper.platform.Platform
 import java.io.File
 
 data class SavedLoop(
@@ -9,11 +10,13 @@ data class SavedLoop(
 )
 
 /**
- * Lists loops in ~/Music/NicheLooper and decodes them back to mono float PCM
- * at the engine sample rate. Decoding runs off the audio path.
+ * Lists loops in the NicheLooper folder of the music folder (see [LoopSaver])
+ * and decodes them back to mono float PCM at the engine sample rate. Decoding
+ * runs off the audio path.
  *
  * WAV is read directly; .m4a (e.g. loops saved by the Android app and copied
- * over) is converted through macOS's bundled `afconvert` first.
+ * over) is converted through macOS's bundled `afconvert` first, and decoded
+ * by [M4aDecoder] on other systems.
  */
 object LoopLibrary {
 
@@ -36,17 +39,22 @@ object LoopLibrary {
 
     /** Decodes to mono float at [targetSampleRate], capped to [maxFrames]. */
     fun decode(loop: SavedLoop, targetSampleRate: Int, maxFrames: Int): FloatArray {
-        val wavFile =
-            if (loop.file.extension.equals("m4a", true)) convertToWav(loop.file) else loop.file
+        val decoded = readAudio(loop.file)
+        val samples =
+            if (decoded.sampleRate == targetSampleRate) decoded.samples
+            else resampleLinear(decoded.samples, decoded.sampleRate, targetSampleRate)
+        check(samples.isNotEmpty()) { "Keine Audiodaten in ${loop.name}" }
+        return if (samples.size > maxFrames) samples.copyOf(maxFrames) else samples
+    }
+
+    private fun readAudio(file: File): WavIo.Decoded {
+        if (!file.extension.equals("m4a", true)) return WavIo.read(file)
+        if (!Platform.isMac) return M4aDecoder.read(file)
+        val wavFile = convertToWav(file)
         try {
-            val decoded = WavIo.read(wavFile)
-            val samples =
-                if (decoded.sampleRate == targetSampleRate) decoded.samples
-                else resampleLinear(decoded.samples, decoded.sampleRate, targetSampleRate)
-            check(samples.isNotEmpty()) { "Keine Audiodaten in ${loop.name}" }
-            return if (samples.size > maxFrames) samples.copyOf(maxFrames) else samples
+            return WavIo.read(wavFile)
         } finally {
-            if (wavFile != loop.file) wavFile.delete()
+            wavFile.delete()
         }
     }
 

@@ -1,23 +1,30 @@
 package nichelooper.audio
 
+import nichelooper.platform.Platform
+import nichelooper.platform.UserDirs
 import java.io.File
 
 /**
- * Named A/S/D chain presets. Each preset is the binary property list produced
- * by [AudioEngine.saveBank] — i.e. a snapshot of all three plugin chains
- * (plugin identity via AudioComponentDescription + full AU state via
- * ClassInfo, incl. the loaded NAM model). Stored one file per preset in
- * ~/Library/Application Support/NicheLooper/presets.
+ * Named A/S/D chain presets. Each preset is the blob produced by
+ * [AudioEngine.saveBank] — i.e. a snapshot of all three plugin chains
+ * (plugin identity + full plugin state, incl. the loaded NAM model): on macOS
+ * a binary property list (AudioComponentDescription + AU ClassInfo), on Linux
+ * a "NLK1" blob of the VST3 component/controller states. Presets are not
+ * portable between the two. Stored one file per preset in
+ * ~/Library/Application Support/NicheLooper/presets (macOS) or
+ * ~/.local/share/NicheLooper/presets (Linux, honouring XDG_DATA_HOME).
  *
  * Nothing is auto-saved: presets exist only after the user explicitly saves
  * one via the top-right menu.
  */
 object ChainPresets {
 
-    private val dir = File(
-        System.getProperty("user.home"),
-        "Library/Application Support/NicheLooper/presets",
-    )
+    private val dir =
+        if (Platform.isMac) {
+            File(System.getProperty("user.home"), "Library/Application Support/NicheLooper/presets")
+        } else {
+            File(UserDirs.dataHome(), "NicheLooper/presets")
+        }
     private const val EXT = "namchain"
 
     private fun file(name: String): File = File(dir, sanitize(name) + ".$EXT")
