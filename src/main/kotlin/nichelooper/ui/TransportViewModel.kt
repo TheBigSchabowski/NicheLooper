@@ -21,6 +21,7 @@ import nichelooper.audio.LooperCommand
 import nichelooper.audio.LooperState
 import nichelooper.audio.RhythmTables
 import nichelooper.audio.SavedLoop
+import nichelooper.platform.Platform
 
 data class TransportUiState(
     val inputDevices: List<String> = emptyList(),
@@ -28,6 +29,7 @@ data class TransportUiState(
     val selectedInput: String? = null,
     val selectedOutput: String? = null,
     val availablePlugins: List<String> = emptyList(),
+    val pluginScanDone: Boolean = false,
     val chains: List<List<String>> = List(TransportViewModel.CHAIN_COUNT) { emptyList() },
     val activeChain: Int = 0,
     val engineRunning: Boolean = false,
@@ -65,7 +67,7 @@ data class TransportUiState(
 
 /**
  * Desktop counterpart of the Android TransportViewModel. Devices are chosen
- * by name from the CoreAudio enumeration (instead of the USB detector);
+ * by name from the audio backend's enumeration (instead of the USB detector);
  * selection survives re-enumeration because names, not indices, are stored.
  * The engine is started explicitly via the Start button — auto-starting on
  * the built-in mic + speakers with monitoring on would howl.
@@ -97,11 +99,12 @@ class TransportViewModel {
             }
         }
 
-        // One-time enumeration of installed effect AUs for the chain editor.
+        // One-time enumeration of installed effect plugins (Audio Units on
+        // macOS, VST3 on Linux) for the chain editor.
         scope.launch {
             val plugins = runCatching { AudioEngine.effectPluginNames }
                 .getOrDefault(emptyList())
-            _uiState.update { it.copy(availablePlugins = plugins) }
+            _uiState.update { it.copy(availablePlugins = plugins, pluginScanDone = true) }
         }
 
         // Populate the preset menu (bank may be empty on a fresh install).
@@ -137,7 +140,7 @@ class TransportViewModel {
 
     private fun refreshDevices() {
         val result = runCatching {
-            check(AudioEngine.refreshDevices()) { "CoreAudio context failed" }
+            check(AudioEngine.refreshDevices()) { "audio context failed" }
         }
         if (result.isFailure) {
             _uiState.update {
@@ -213,7 +216,7 @@ class TransportViewModel {
                             errorMessage = "Could not open duplex audio streams on " +
                                 "\"${state.selectedInput ?: "default"}\" → " +
                                 "\"${state.selectedOutput ?: "default"}\". " +
-                                "Check the microphone permission in System Settings.",
+                                START_FAILED_HINT,
                         )
                     }
                 }
@@ -310,6 +313,23 @@ class TransportViewModel {
                 it.copy(
                     chains = readChains(),
                     saveMessage = if (ok) null else "Plugin failed to load: $name",
+                )
+            }
+        }
+    }
+
+    /**
+     * Adds the plugin at [path] (Linux: a .vst3 folder anywhere on disk) to the
+     * active chain — for plugins outside the standard VST3 folders.
+     */
+    fun addPluginFromPath(path: String) {
+        val chain = _uiState.value.activeChain
+        scope.launch {
+            val ok = AudioEngine.chainAddPluginFromPath(chain, path)
+            _uiState.update {
+                it.copy(
+                    chains = readChains(),
+                    saveMessage = if (ok) null else "Plugin failed to load: $path",
                 )
             }
         }
@@ -424,7 +444,7 @@ class TransportViewModel {
         _uiState.update { it.copy(saveMessage = null) }
     }
 
-    /** Snapshots the loop and writes it to ~/Music/NicheLooper — audio keeps running. */
+    /** Snapshots the loop and writes it to NicheLooper/ in the music folder — audio keeps running. */
     fun saveLoop() {
         val state = _uiState.value
         if (state.saving || state.loopLengthFrames <= 0 || state.sampleRate <= 0) return
@@ -544,5 +564,13 @@ class TransportViewModel {
         const val MIN_BPM = 40
         const val MAX_BPM = 240
         const val CHAIN_COUNT = 3
+
+        private val START_FAILED_HINT =
+            if (Platform.isMac) {
+                "Check the microphone permission in System Settings."
+            } else {
+                "Check that no other program is holding the devices; the environment variable " +
+                    "NICHELOOPER_AUDIO_BACKEND (pulseaudio, alsa or jack) picks the sound system."
+            }
     }
 }

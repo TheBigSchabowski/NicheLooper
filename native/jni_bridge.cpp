@@ -7,10 +7,10 @@
 #include <thread>
 #include <vector>
 
-#include "MacAudioEngine.h"
+#include "PlatformEngine.h"
 
 namespace {
-MacAudioEngine gEngine;
+PlatformAudioEngine gEngine;
 
 std::vector<float> toVector(JNIEnv* env, jfloatArray array) {
     std::vector<float> v(static_cast<size_t>(env->GetArrayLength(array)));
@@ -289,7 +289,7 @@ Java_nichelooper_audio_AudioEngine_nativeSetDrumSamples(
                            toVector(env, hat), sourceRate);
 }
 
-// ---- Plugin chains (Audio Unit hosting) ----
+// ---- Plugin chains (Audio Units on macOS, VST3 on Linux) ----
 
 JNIEXPORT jobjectArray JNICALL
 Java_nichelooper_audio_AudioEngine_nativeGetEffectPluginNames(JNIEnv* env, jobject /*thiz*/) {
@@ -301,6 +301,21 @@ Java_nichelooper_audio_AudioEngine_nativeChainAddPlugin(
         JNIEnv* /*env*/, jobject /*thiz*/, jint chain, jint pluginIndex) {
     return gEngine.plugins().addPlugin(chain, pluginIndex) ? JNI_TRUE : JNI_FALSE;
 }
+
+#if defined(__linux__)
+// VST3 bundles can live anywhere on disk; the user picks one in a file dialog.
+JNIEXPORT jboolean JNICALL
+Java_nichelooper_audio_AudioEngine_nativeChainAddPluginFromPath(
+        JNIEnv* env, jobject /*thiz*/, jint chain, jstring path) {
+    const char* utf8 = env->GetStringUTFChars(path, nullptr);
+    if (utf8 == nullptr) {
+        return JNI_FALSE;
+    }
+    std::string nativePath(utf8);
+    env->ReleaseStringUTFChars(path, utf8);
+    return gEngine.plugins().addPluginFromPath(chain, nativePath) ? JNI_TRUE : JNI_FALSE;
+}
+#endif
 
 JNIEXPORT jboolean JNICALL
 Java_nichelooper_audio_AudioEngine_nativeChainRemovePlugin(
@@ -342,7 +357,7 @@ Java_nichelooper_audio_AudioEngine_nativeGetChainDebugReport(JNIEnv* env, jobjec
     return env->NewStringUTF(gEngine.plugins().debugReport().c_str());
 }
 
-// ---- Preset bank (all 3 chains: identity + full AU state) ----
+// ---- Preset bank (all 3 chains: identity + full plugin state) ----
 
 JNIEXPORT jbyteArray JNICALL
 Java_nichelooper_audio_AudioEngine_nativeSaveBank(JNIEnv* env, jobject /*thiz*/) {
@@ -383,7 +398,9 @@ Java_nichelooper_audio_AudioEngine_nativeLoadBank(
 // loop no longer pumps and our own editor-window teardown (dispatch_sync)
 // would deadlock on top of it. The plugin thread then faults, the JVM signal
 // handler turns that into a fatal error report and macOS shows the
-// "NicheLooper quit unexpectedly" dialog on every single quit.
+// "NicheLooper quit unexpectedly" dialog on every single quit. On Linux the
+// plugin UI thread and the plugins' own threads would likewise keep running
+// while libraries unload.
 //
 // Nothing of ours needs that teardown: loops and chain presets are written
 // only on explicit user action, and the OS reclaims audio device, memory and

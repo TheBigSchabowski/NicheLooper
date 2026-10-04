@@ -47,14 +47,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
+import nichelooper.ShortcutKeys
 import nichelooper.audio.LooperState
 import nichelooper.audio.SavedLoop
+import nichelooper.platform.Platform
 
 private val RecordRed = Color(0xFFE53935)
 private val OverdubOrange = Color(0xFFFB8C00)
@@ -114,6 +120,7 @@ fun TransportScreen(viewModel: TransportViewModel) {
             state = state,
             onSelectChain = viewModel::setActiveChain,
             onAddPlugin = viewModel::addPluginToChain,
+            onAddPluginFromPath = viewModel::addPluginFromPath,
             onRemovePlugin = viewModel::removePluginFromChain,
             onMovePluginUp = viewModel::movePluginUp,
             onOpenEditor = viewModel::openPluginEditor,
@@ -415,6 +422,7 @@ private fun ChainsCard(
     state: TransportUiState,
     onSelectChain: (Int) -> Unit,
     onAddPlugin: (Int) -> Unit,
+    onAddPluginFromPath: (String) -> Unit,
     onRemovePlugin: (Int) -> Unit,
     onMovePluginUp: (Int) -> Unit,
     onOpenEditor: (Int) -> Unit,
@@ -516,6 +524,20 @@ private fun ChainsCard(
                             },
                         )
                     }
+                }
+            }
+            if (Platform.isLinux) {
+                OutlinedButton(
+                    onClick = { PluginFilePicker.pick()?.let(onAddPluginFromPath) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("+ ADD FROM FILE…") }
+                if (state.pluginScanDone && state.availablePlugins.isEmpty()) {
+                    Text(
+                        "No VST3 plugins found in ~/.vst3, /usr/lib/vst3 or /usr/local/lib/vst3. " +
+                            "Put them there, or pick a .vst3 folder with ADD FROM FILE.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1046,6 +1068,7 @@ private fun PresetMenu(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
+                    modifier = Modifier.onKeyEvent { it.type == KeyEventType.KeyDown && it.key in ShortcutKeys },
                     singleLine = true,
                     label = { Text("Name") },
                 )
