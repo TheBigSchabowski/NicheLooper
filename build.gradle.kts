@@ -245,7 +245,7 @@ compose.desktop {
             // Each format can only be built on its own operating system: the DMG on the Mac, the DEB on Linux.
             targetFormats(TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "NicheLooper"
-            packageVersion = "1.1.1"
+            packageVersion = "1.1.2"
             description = "Live-Looper mit Metronom, Drums und Plugin-Effektketten für Gitarre"
             vendor = "TheBigSchabowski"
             // The AAC decoder (jaad) logs through java.logging; jpackage only bundles what it is told to.

@@ -25,8 +25,8 @@ oder JACK unter Linux) über JNI.
    bleiben, ohne dass macOS erneut fragt — siehe „Fehlerbehebung“.
 4. Input/Output-Gerät wählen, **START ENGINE** — loslegen.
 
-> Aktuelle Version: [**NicheLooper 1.1.1**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.1.1)
-> — `NicheLooper-1.1.1.dmg` direkt von der Releases-Seite laden.
+> Aktuelle Version: [**NicheLooper 1.1.2**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.1.2)
+> — `NicheLooper-1.1.2.dmg` direkt von der Releases-Seite laden.
 
 ### Linux
 
@@ -55,7 +55,7 @@ Für Linux baut `tools/build-linux.sh` zwei Pakete, die zu einem
 
 ```sh
 ./gradlew run          # App direkt aus dem Source starten
-./gradlew packageDmg   # → build/compose/binaries/main/dmg/NicheLooper-1.1.1.dmg (am Mac)
+./gradlew packageDmg   # → build/compose/binaries/main/dmg/NicheLooper-1.1.2.dmg (am Mac)
 ./tools/build-linux.sh # → dist/linux: .deb, .tar.gz und SHA256SUMS.txt (unter Linux)
 ```
 
