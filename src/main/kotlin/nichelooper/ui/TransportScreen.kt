@@ -1,5 +1,6 @@
 package nichelooper.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,18 +48,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
-import nichelooper.ShortcutKeys
 import nichelooper.audio.LooperState
 import nichelooper.audio.SavedLoop
 import nichelooper.platform.Platform
@@ -67,7 +66,7 @@ private val OverdubOrange = Color(0xFFFB8C00)
 private val PlayGreen = Color(0xFF43A047)
 
 private val AutoLoopBarChoices = listOf(4, 6, 8)
-private val ChainNames = listOf("A", "S", "D")
+private val ChainActions = listOf(KeyAction.CHAIN_1, KeyAction.CHAIN_2, KeyAction.CHAIN_3)
 
 private fun framesPerBeat(sampleRate: Int, bpm: Int): Int =
     if (sampleRate > 0 && bpm > 0) sampleRate * 60 / bpm else 0
@@ -97,13 +96,25 @@ fun TransportScreen(viewModel: TransportViewModel) {
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
-            PresetMenu(
-                state = state,
-                onSave = viewModel::savePreset,
-                onLoad = viewModel::loadPreset,
-                onDelete = viewModel::deletePreset,
-                onRefresh = viewModel::refreshPresets,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KeyBindingsButton(
+                    state = state,
+                    onCapture = viewModel::setCapturingKeyFor,
+                    onAssign = viewModel::assignKey,
+                    onReset = viewModel::resetKeyBindings,
+                )
+                PresetMenu(
+                    state = state,
+                    onSave = viewModel::savePreset,
+                    onLoad = viewModel::loadPreset,
+                    onDelete = viewModel::deletePreset,
+                    onRefresh = viewModel::refreshPresets,
+                    onTextFieldFocused = viewModel::setTextFieldFocused,
+                )
+            }
         }
 
         ErrorCard(state = state, onRetry = viewModel::startEngine)
@@ -132,6 +143,15 @@ fun TransportScreen(viewModel: TransportViewModel) {
             state = state,
             onClick = viewModel::record,
         )
+
+        val recStopKey = state.keyBindings.keyFor(KeyAction.REC_STOP)
+        if (recStopKey != null) {
+            Text(
+                text = "Stop / Record: ${KeyBindings.keyLabel(recStopKey)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val hasLoop = state.loopLengthFrames > 0
@@ -443,17 +463,20 @@ private fun ChainsCard(
                     fontWeight = FontWeight.Bold,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChainNames.forEachIndexed { index, name ->
+                    ChainActions.forEachIndexed { index, action ->
+                        val key = state.keyBindings.keyFor(action)
+                        val label = key?.let(KeyBindings::keyLabel) ?: "${index + 1}"
                         FilterChip(
                             selected = state.activeChain == index,
                             onClick = { onSelectChain(index) },
-                            label = { Text(name) },
+                            label = { Text(label) },
                         )
                     }
                 }
             }
+            val chainKeysText = ChainActions.joinToString(" · ") { state.keyBindings.labelFor(it) }
             Text(
-                "Keys A · S · D switch the live chain — the loop keeps its recorded sound.",
+                "Keys $chainKeysText switch the live chain — the loop keeps its recorded sound.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -775,10 +798,12 @@ private fun RhythmCard(
                 ) {
                     // Live drop-out — the clock keeps running underneath, so
                     // unmuting always lands back in the groove in time.
+                    val muteKey = state.keyBindings.keyFor(KeyAction.DRUMS_MUTE)
+                    val muteLabel = if (muteKey != null) "Mute (${KeyBindings.keyLabel(muteKey)})" else "Mute"
                     FilterChip(
                         selected = state.drumsMuted,
                         onClick = onToggleMute,
-                        label = { Text("Mute (M)") },
+                        label = { Text(muteLabel) },
                         enabled = enabled && state.drumsEnabled,
                     )
                     Switch(
@@ -982,12 +1007,147 @@ private fun GainSlider(
 }
 
 @Composable
+private fun KeyBindingsButton(
+    state: TransportUiState,
+    onCapture: (KeyAction?) -> Unit,
+    onAssign: (KeyAction, Key?) -> Unit,
+    onReset: () -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    OutlinedButton(onClick = { showDialog = true }) {
+        Text("Tasten")
+    }
+
+    if (showDialog) {
+        KeyBindingsDialog(
+            state = state,
+            onCapture = onCapture,
+            onAssign = onAssign,
+            onReset = onReset,
+            onDismiss = {
+                onCapture(null)
+                showDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun KeyBindingsDialog(
+    state: TransportUiState,
+    onCapture: (KeyAction?) -> Unit,
+    onAssign: (KeyAction, Key?) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    DisposableEffect(Unit) {
+        onDispose { onCapture(null) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tastenbelegung") },
+        text = {
+            Column(
+                modifier = Modifier.widthIn(min = 380.dp, max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Klicke auf ein Tastenfeld und drücke die gewünschte Taste " +
+                        "(Esc = Abbrechen, Backspace/Entf = Belegung löschen). " +
+                        "In Textfeldern und geöffneten VST/AU-Plugin-Fenstern (z. B. beim Suchen) " +
+                        "funktionieren Leertaste und Buchstaben weiterhin normal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                HorizontalDivider()
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 380.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(KeyAction.entries) { action ->
+                        val capturing = state.capturingKeyFor == action
+                        val currentKey = state.keyBindings.keyFor(action)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    action.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    action.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onCapture(if (capturing) null else action)
+                                    },
+                                    border = if (capturing) {
+                                        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        ButtonDefaults.outlinedButtonBorder()
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Text(
+                                        text = if (capturing) {
+                                            "Taste drücken…"
+                                        } else {
+                                            state.keyBindings.labelFor(action)
+                                        },
+                                        color = if (capturing) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                        fontWeight = if (capturing) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                }
+                                if (currentKey != null) {
+                                    TextButton(
+                                        onClick = { onAssign(action, null) },
+                                        contentPadding = PaddingValues(horizontal = 6.dp),
+                                    ) {
+                                        Text("✕")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fertig") }
+        },
+        dismissButton = {
+            TextButton(onClick = onReset) { Text("Standard") }
+        },
+    )
+}
+
+@Composable
 private fun PresetMenu(
     state: TransportUiState,
     onSave: (String) -> Unit,
     onLoad: (String) -> Unit,
     onDelete: (String) -> Unit,
     onRefresh: () -> Unit,
+    onTextFieldFocused: (Boolean) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -1061,6 +1221,10 @@ private fun PresetMenu(
     }
 
     if (showSaveDialog) {
+        DisposableEffect(Unit) {
+            onTextFieldFocused(true)
+            onDispose { onTextFieldFocused(false) }
+        }
         AlertDialog(
             onDismissRequest = { showSaveDialog = false; name = "" },
             title = { Text("Preset speichern") },
@@ -1068,7 +1232,7 @@ private fun PresetMenu(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    modifier = Modifier.onKeyEvent { it.type == KeyEventType.KeyDown && it.key in ShortcutKeys },
+                    modifier = Modifier.onFocusChanged { onTextFieldFocused(it.isFocused) },
                     singleLine = true,
                     label = { Text("Name") },
                 )

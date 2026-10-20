@@ -85,6 +85,10 @@ void openEditorWindow(AudioComponentInstance unit, const std::string& name) {
         auto it = windows.find(unit);
         if (it != windows.end()) {
             [it->second makeKeyAndOrderFront:nil];
+            if (it->second.firstResponder == nil || it->second.firstResponder == it->second) {
+                [it->second makeFirstResponder:it->second.contentView];
+            }
+            [NSApp activateIgnoringOtherApps:YES];
             return;
         }
         NSView* view = createViewForUnit(unit);
@@ -105,6 +109,7 @@ void openEditorWindow(AudioComponentInstance unit, const std::string& name) {
         [window center];
         windows[unit] = window;  // owned here (rc 1 from alloc)
         [window makeKeyAndOrderFront:nil];
+        [window makeFirstResponder:view];
         [NSApp activateIgnoringOtherApps:YES];
         std::fprintf(stderr, "NicheLooper: editor window open for %s (visible=%d)\n",
                      name.c_str(), window.isVisible ? 1 : 0);

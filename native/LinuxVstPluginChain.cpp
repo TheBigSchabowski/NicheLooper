@@ -777,8 +777,8 @@ public:
         }
         state.windows[mTop] = this;
         state.windows[mParent] = this;
-        XSelectInput(display, mTop, StructureNotifyMask | FocusChangeMask);
-        XSelectInput(display, mParent, SubstructureNotifyMask | PropertyChangeMask);
+        XSelectInput(display, mTop, StructureNotifyMask | FocusChangeMask | KeyPressMask | KeyReleaseMask);
+        XSelectInput(display, mParent, SubstructureNotifyMask | PropertyChangeMask | KeyPressMask | KeyReleaseMask);
         applyWindowProperties();
         XMapWindow(display, mParent);
         return true;
@@ -811,6 +811,7 @@ public:
         XState& state = xstate();
         XMapRaised(state.display, mTop);
         mVisible = true;
+        mTopFocused = true;
         XEvent event;
         std::memset(&event, 0, sizeof(event));
         event.xclient.type = ClientMessage;
@@ -820,6 +821,7 @@ public:
         event.xclient.data.l[0] = 1;  // source indication: application
         event.xclient.data.l[1] = CurrentTime;
         XSendEvent(state.display, state.root, False, SubstructureRedirectMask | SubstructureNotifyMask, &event);
+        focusPlug();
         XFlush(state.display);
     }
 
@@ -831,6 +833,7 @@ public:
         XState& state = xstate();
         XWithdrawWindow(state.display, mTop, DefaultScreen(state.display));
         mVisible = false;
+        mTopFocused = false;
         XFlush(state.display);
     }
 
@@ -941,17 +944,34 @@ public:
                     onTopConfigured(event.xconfigure.width, event.xconfigure.height);
                 }
                 break;
+            case MapNotify:
+                if (event.xmap.window == mTop || event.xmap.window == mPlug) {
+                    focusPlug();
+                }
+                break;
             case FocusIn:
-                if (event.xfocus.window == mTop && event.xfocus.detail != NotifyInferior && mPlug != 0 && mPlugXEmbed) {
-                    sendXEmbed(mPlug, kXEmbedWindowActivate, 0, 0, 0);
-                    sendXEmbed(mPlug, kXEmbedFocusIn, kXEmbedFocusCurrent, 0, 0);
-                    XFlush(state.display);
+                if (event.xfocus.window == mTop && event.xfocus.detail != NotifyInferior) {
+                    mTopFocused = true;
+                    focusPlug();
                 }
                 break;
             case FocusOut:
-                if (event.xfocus.window == mTop && event.xfocus.detail != NotifyInferior && mPlug != 0 && mPlugXEmbed) {
-                    sendXEmbed(mPlug, kXEmbedFocusOut, 0, 0, 0);
-                    sendXEmbed(mPlug, kXEmbedWindowDeactivate, 0, 0, 0);
+                if (event.xfocus.window == mTop && event.xfocus.detail != NotifyInferior) {
+                    mTopFocused = false;
+                    if (mPlug != 0 && mPlugXEmbed) {
+                        sendXEmbed(mPlug, kXEmbedFocusOut, 0, 0, 0);
+                        sendXEmbed(mPlug, kXEmbedWindowDeactivate, 0, 0, 0);
+                        XFlush(state.display);
+                    }
+                }
+                break;
+            case KeyPress:
+            case KeyRelease:
+                if ((event.xkey.window == mTop || event.xkey.window == mParent) && mPlug != 0) {
+                    focusPlug();
+                    XEvent copy = event;
+                    copy.xkey.window = mPlug;
+                    XSendEvent(state.display, mPlug, False, NoEventMask, &copy);
                     XFlush(state.display);
                 }
                 break;
@@ -961,12 +981,16 @@ public:
                     unsigned long version = 0;
                     unsigned long flags = 0;
                     if (readXEmbedInfo(mPlug, &version, &flags)) {
+                        if (!mPlugXEmbed) {
+                            mPlugXEmbed = true;
+                            sendXEmbed(mPlug, kXEmbedEmbeddedNotify, 0, static_cast<long>(mParent), 0);
+                        }
                         if ((flags & kXEmbedMapped) != 0) {
                             XMapWindow(state.display, mPlug);
                         } else {
                             XUnmapWindow(state.display, mPlug);
                         }
-                        XFlush(state.display);
+                        focusPlug();
                     }
                 }
                 break;
@@ -977,8 +1001,8 @@ public:
                 } else if (event.xclient.message_type == state.xembed && event.xclient.window == mParent &&
                            event.xclient.format == 32 && event.xclient.data.l[1] == kXEmbedRequestFocus &&
                            mPlug != 0) {
-                    sendXEmbed(mPlug, kXEmbedFocusIn, kXEmbedFocusCurrent, 0, 0);
-                    XFlush(state.display);
+                    mTopFocused = true;
+                    focusPlug();
                 }
                 break;
             default:
@@ -1066,6 +1090,56 @@ private:
         XFlush(state.display);
     }
 
+    static bool isDescendantWindow(Display* display, Window ancestor, Window candidate) {
+        if (ancestor == 0 || candidate == 0 || candidate == PointerRoot || candidate == None) {
+            return false;
+        }
+        Window current = candidate;
+        for (int depth = 0; depth < 32 && current != 0; ++depth) {
+            if (current == ancestor) {
+                return true;
+            }
+            Window root = 0;
+            Window parent = 0;
+            Window* children = nullptr;
+            unsigned int nchildren = 0;
+            const Status status = XQueryTree(display, current, &root, &parent, &children, &nchildren);
+            if (children != nullptr) {
+                XFree(children);
+            }
+            if (status == 0 || parent == root || parent == current) {
+                break;
+            }
+            current = parent;
+        }
+        return false;
+    }
+
+    void focusPlug() {
+        if (mPlug == 0 || !mVisible || mDestroying || mDestroyed) {
+            return;
+        }
+        XState& state = xstate();
+        XWindowAttributes attr{};
+        if (XGetWindowAttributes(state.display, mPlug, &attr) != 0 && attr.map_state == IsViewable) {
+            Window currentFocus = 0;
+            int revertTo = 0;
+            XGetInputFocus(state.display, &currentFocus, &revertTo);
+            // Hand X11 input focus to mPlug so JUCE LinuxComponentPeer::isFocused()
+            // and embedded WebView/search inputs (e.g. TONE3000) receive key events,
+            // without stealing focus from a child window of mPlug that already has it.
+            if (!isDescendantWindow(state.display, mPlug, currentFocus) &&
+                (mTopFocused || currentFocus == mTop || currentFocus == mParent)) {
+                XSetInputFocus(state.display, mPlug, RevertToParent, CurrentTime);
+            }
+        }
+        if (mPlugXEmbed) {
+            sendXEmbed(mPlug, kXEmbedWindowActivate, 0, 0, 0);
+            sendXEmbed(mPlug, kXEmbedFocusIn, kXEmbedFocusCurrent, 0, 0);
+        }
+        XFlush(state.display);
+    }
+
     // The plugin created (or reparented) its window into our XEmbed parent: embed it.
     void adoptPlug(Window plug) {
         if (mPlug != 0) {
@@ -1074,7 +1148,7 @@ private:
         XState& state = xstate();
         mPlug = plug;
         state.windows[plug] = this;
-        XSelectInput(state.display, plug, PropertyChangeMask);
+        XSelectInput(state.display, plug, PropertyChangeMask | StructureNotifyMask);
         unsigned long version = 0;
         unsigned long flags = 0;
         mPlugXEmbed = readXEmbedInfo(plug, &version, &flags);
@@ -1085,11 +1159,7 @@ private:
             XMapWindow(state.display, plug);
         }
         XResizeWindow(state.display, plug, static_cast<unsigned>(mWidth), static_cast<unsigned>(mHeight));
-        if (mPlugXEmbed) {
-            sendXEmbed(plug, kXEmbedWindowActivate, 0, 0, 0);
-            sendXEmbed(plug, kXEmbedFocusIn, kXEmbedFocusCurrent, 0, 0);
-        }
-        XFlush(state.display);
+        focusPlug();
     }
 
     // The user (or the window manager) resized the top-level window.
@@ -1130,6 +1200,7 @@ private:
     Window mParent = 0;
     Window mPlug = 0;
     bool mPlugXEmbed = false;
+    bool mTopFocused = false;
     bool mFrameSet = false;
     bool mAttached = false;
     bool mVisible = false;

@@ -25,8 +25,8 @@ oder JACK unter Linux) über JNI.
    bleiben, ohne dass macOS erneut fragt — siehe „Fehlerbehebung“.
 4. Input/Output-Gerät wählen, **START ENGINE** — loslegen.
 
-> Aktuelle Version: [**NicheLooper 1.1.2**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.1.2)
-> — `NicheLooper-1.1.2.dmg` direkt von der Releases-Seite laden.
+> Aktuelle Version: [**NicheLooper 1.2.0**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.2.0)
+> — Builds für **macOS (`.dmg`)**, **Linux (`.deb` / `.tar.gz`)**, **Windows (`.msi`)** und **Android (`.apk`)** direkt von der Releases-Seite laden.
 
 ### Linux
 
@@ -165,9 +165,27 @@ Amp-Sound auf; Umschalten ändert nur den Live-Sound, nie fertige Loops.
   Fenster öffnen, Signal verarbeiten, entfernen, Presets speichern und laden.
   Nicht getestet sind kommerzielle Plugins (NAM, TONEX, Neural DSP …) und die
   Tastatureingabe in Plugin-Fenstern.
-- **Tasten `A` / `S` / `D`** (oder die Chips) schalten die Live-Chain
-  knackfrei um. **`M`** (oder der Mute-Chip) blendet die Drums live aus.
-  Die Tasten greifen nur, wenn kein Textfeld den Fokus hat.
+- **Tastenbelegung („Tasten“):** Über den Button **Tasten** oben rechts lassen sich
+  alle 18 Tastenkürzel frei konfigurieren (inkl. USB-/Bluetooth-Fußschalter) und
+  dauerhaft speichern:
+  - **`Leertaste`** — **Stop / Record** (startet Aufnahme bei leerem/gestopptem Loop, stoppt Wiedergabe/Aufnahme bei laufendem Loop)
+  - **`R`** — Record / Set Loop / Re-Rec
+  - **`X`** — Stop
+  - **`P`** — Play / Stop
+  - **`O`** — Overdub
+  - **`C`** — Clear
+  - **`U`** — Loop speichern
+  - **`A` / `S` / `D`** — Plugin-Chain 1 / 2 / 3
+  - **`M`** — Drums Mute (Live Drop-out im Takt)
+  - **`B`** — Drums an/aus
+  - **`K`** — Metronom an/aus
+  - **`I`** — Count-in an/aus
+  - **`L`** — Auto-Loop an/aus
+  - **`V`** — Monitor Input an/aus
+  - **`↓` / `↑`** — BPM −1 / +1
+  Die Tasten greifen nur im Hauptfenster und wenn kein Textfeld den Fokus hat —
+  in geöffneten VST3-/AU-Plugin-Fenstern (z. B. beim Tippen der Leertaste in einem
+  Plugin-Suchfeld wie TONE3000) gehen alle Tasten direkt ans Plugin.
 - „+ ADD PLUGIN" fügt der aktiven Chain ein Plugin hinzu; **EDIT** (oder
   Klick auf den Namen) öffnet das Original-Plugin-Fenster — dort z. B. das
   .nam-Modell laden.
