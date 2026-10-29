@@ -141,6 +141,22 @@ Java_nichelooper_audio_AudioEngine_nativeCopyLoop(
     return copied;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_nichelooper_audio_AudioEngine_nativePrepareDrumFilter(JNIEnv* /*env*/, jobject /*thiz*/) {
+    return gEngine.prepareDrumFilter() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_nichelooper_audio_AudioEngine_nativeSetDrumFilter(
+        JNIEnv* /*env*/, jobject /*thiz*/, jboolean enabled) {
+    gEngine.looper().setDrumFilterEnabled(enabled == JNI_TRUE);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_nichelooper_audio_AudioEngine_nativeIsDrumFilterReady(JNIEnv* /*env*/, jobject /*thiz*/) {
+    return gEngine.looper().drumFilterReady() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jfloat JNICALL
 Java_nichelooper_audio_AudioEngine_nativeReadInputPeak(JNIEnv* /*env*/, jobject /*thiz*/) {
     return gEngine.readInputPeak();
@@ -273,6 +289,12 @@ JNIEXPORT void JNICALL
 Java_nichelooper_audio_AudioEngine_nativeSetLoopVolume(
         JNIEnv* /*env*/, jobject /*thiz*/, jfloat gain) {
     gEngine.looper().setLoopGain(gain);
+}
+
+JNIEXPORT void JNICALL
+Java_nichelooper_audio_AudioEngine_nativeSetPostCloseFold(
+        JNIEnv* /*env*/, jobject /*thiz*/, jboolean enabled) {
+    gEngine.looper().setPostCloseFoldEnabled(enabled == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL

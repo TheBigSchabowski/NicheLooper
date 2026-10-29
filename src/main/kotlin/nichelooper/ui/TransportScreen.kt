@@ -117,6 +117,10 @@ fun TransportScreen(viewModel: TransportViewModel) {
             }
         }
 
+        if (state.commandMode) {
+            CommandBanner()
+        }
+
         ErrorCard(state = state, onRetry = viewModel::startEngine)
 
         DeviceCard(
@@ -141,7 +145,7 @@ fun TransportScreen(viewModel: TransportViewModel) {
 
         RecordButton(
             state = state,
-            onClick = viewModel::record,
+            onClick = viewModel::recordButton,
         )
 
         val recStopKey = state.keyBindings.keyFor(KeyAction.REC_STOP)
@@ -150,6 +154,32 @@ fun TransportScreen(viewModel: TransportViewModel) {
                 text = "Stop / Record: ${KeyBindings.keyLabel(recStopKey)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LoopMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = state.loopMode == mode,
+                    onClick = { viewModel.setLoopMode(mode) },
+                    label = { Text(mode.title) },
+                )
+            }
+            Text(
+                "Ctrl+B L",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (state.loopMode == LoopMode.ONE_SHOT) {
+            Text(
+                "Mikro wird nur aufgenommen, nicht mitgehört — keine Rückkopplung über die Lautsprecher.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
 
@@ -186,6 +216,34 @@ fun TransportScreen(viewModel: TransportViewModel) {
                     },
                 ),
             ) { Text("OVERDUB") }
+
+            // Silences the loop; it keeps running underneath, so unmuting lands in time.
+            val loopMuteKey = state.keyBindings.shortLabelFor(KeyAction.LOOP_MUTE)
+            FilterChip(
+                selected = state.loopMuted,
+                onClick = viewModel::toggleLoopMute,
+                label = { Text(if (loopMuteKey != null) "MUTE ($loopMuteKey)" else "MUTE") },
+            )
+        }
+
+        // Drums the mic heard from the speakers: in the loop or gated out. The
+        // filtered version is built right after a one-shot take closes.
+        if (state.loopMode == LoopMode.ONE_SHOT || state.drumFilterReady) {
+            val filterKey = state.keyBindings.shortLabelFor(KeyAction.DRUM_FILTER)
+            val keyHint = if (filterKey != null) " ($filterKey)" else ""
+            FilterChip(
+                selected = state.drumFilterOn,
+                onClick = viewModel::toggleDrumFilter,
+                label = {
+                    Text(
+                        when {
+                            !state.drumFilterReady -> "Drum-Filter$keyHint — nach der Aufnahme"
+                            state.drumFilterOn -> "Drums rausgefiltert$keyHint"
+                            else -> "Drums im Loop$keyHint"
+                        },
+                    )
+                },
+            )
         }
 
         var showLoopPicker by remember { mutableStateOf(false) }
@@ -227,6 +285,7 @@ fun TransportScreen(viewModel: TransportViewModel) {
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (message.startsWith("Saved") || message.startsWith("Loaded") ||
+                    message.startsWith("Drum-Filter bereit") ||
                     message.startsWith("Preset gespeichert") || message.startsWith("Preset geladen")) {
                     PlayGreen
                 } else {
@@ -236,9 +295,21 @@ fun TransportScreen(viewModel: TransportViewModel) {
             )
         }
 
+        if (state.bpmKeysDialogOpen) {
+            BpmKeysDialog(
+                state = state,
+                onCapture = viewModel::setCapturingBpmKey,
+                onPut = viewModel::putBpmKey,
+                onRemove = viewModel::removeBpmKey,
+                onTextFieldFocused = viewModel::setTextFieldFocused,
+                onDismiss = viewModel::closeBpmKeysDialog,
+            )
+        }
+
         RhythmCard(
             state = state,
             onBpm = viewModel::setBpm,
+            onOpenBpmKeys = viewModel::openBpmKeysDialog,
             onMetronome = viewModel::setMetronome,
             onCountIn = viewModel::setCountIn,
             onDrums = viewModel::setDrums,
@@ -264,11 +335,21 @@ fun TransportScreen(viewModel: TransportViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Monitor input", style = MaterialTheme.typography.bodyLarge)
+                    val oneShot = state.loopMode == LoopMode.ONE_SHOT
+                    Column {
+                        Text("Monitor input", style = MaterialTheme.typography.bodyLarge)
+                        if (oneShot) {
+                            Text(
+                                "Aus im Einmal-Modus",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     Switch(
-                        checked = state.monitorEnabled,
+                        checked = state.monitorEnabled && !oneShot,
                         onCheckedChange = viewModel::setMonitor,
-                        enabled = state.engineRunning,
+                        enabled = state.engineRunning && !oneShot,
                     )
                 }
 
@@ -618,7 +699,7 @@ private fun LoopIndicator(state: TransportUiState) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = label,
+            text = if (state.loopMuted && state.loopLengthFrames > 0) "$label · LOOP MUTED" else label,
             color = color,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
@@ -641,9 +722,12 @@ private fun LoopIndicator(state: TransportUiState) {
 @Composable
 private fun RecordButton(state: TransportUiState, onClick: () -> Unit) {
     val counting = state.looperState == LooperState.COUNT_IN
+    val oneShot = state.loopMode == LoopMode.ONE_SHOT
     val label = when (state.looperState) {
         LooperState.RECORDING -> "SET\nLOOP"
         LooperState.EMPTY -> "REC"
+        LooperState.PLAYING, LooperState.OVERDUBBING -> if (oneShot) "STOP" else "RE-\nREC"
+        LooperState.STOPPED -> if (oneShot) "PLAY" else "RE-\nREC"
         LooperState.COUNT_IN -> {
             val beatFrames = framesPerBeat(state.sampleRate, state.bpm)
             if (beatFrames > 0) {
@@ -652,7 +736,6 @@ private fun RecordButton(state: TransportUiState, onClick: () -> Unit) {
                 "…"
             }
         }
-        else -> "RE-\nREC"
     }
     Button(
         onClick = onClick,
@@ -679,6 +762,7 @@ private fun RecordButton(state: TransportUiState, onClick: () -> Unit) {
 private fun RhythmCard(
     state: TransportUiState,
     onBpm: (Int) -> Unit,
+    onOpenBpmKeys: () -> Unit,
     onMetronome: (Boolean) -> Unit,
     onCountIn: (Boolean) -> Unit,
     onDrums: (Boolean) -> Unit,
@@ -705,11 +789,14 @@ private fun RhythmCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
-                Text(
-                    "${state.bpm} BPM",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onOpenBpmKeys) { Text("BPM-Tasten") }
+                    Text(
+                        "${state.bpm} BPM",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Row(
@@ -1136,6 +1223,141 @@ private fun KeyBindingsDialog(
         },
         dismissButton = {
             TextButton(onClick = onReset) { Text("Standard") }
+        },
+    )
+}
+
+/** Shown after Ctrl+B while NicheLooper waits for the command key. */
+@Composable
+private fun CommandBanner() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Text(
+            "Befehl:  L = Looper-Modus wechseln  ·  V = BPM-Tasten  ·  Esc = Abbrechen",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+    }
+}
+
+/** Ctrl+B, V: stores tempos on keys; Shift + key then jumps to that tempo. */
+@Composable
+private fun BpmKeysDialog(
+    state: TransportUiState,
+    onCapture: (Boolean) -> Unit,
+    onPut: (Key, Int) -> Unit,
+    onRemove: (Key) -> Unit,
+    onTextFieldFocused: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var bpmText by remember { mutableStateOf("") }
+    DisposableEffect(Unit) {
+        onDispose {
+            onCapture(false)
+            onTextFieldFocused(false)
+        }
+    }
+    val draft = state.bpmKeyDraft
+    val bpm = bpmText.trim().toIntOrNull()
+        ?.takeIf { it in TransportViewModel.MIN_BPM..TransportViewModel.MAX_BPM }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("BPM-Tasten") },
+        text = {
+            Column(
+                modifier = Modifier.widthIn(min = 380.dp, max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Taste wählen, Tempo eintragen, „Hinzufügen“. Danach setzt ⇧ + Taste " +
+                        "das Tempo sofort (z. B. ⇧ N → 99 BPM). Die normale Belegung der Taste bleibt.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                HorizontalDivider()
+                if (state.bpmKeys.entries.isEmpty()) {
+                    Text(
+                        "Noch keine BPM-Tasten",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 260.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(state.bpmKeys.entries) { (key, tempo) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("⇧ ${KeyBindings.keyLabel(key)}", style = MaterialTheme.typography.bodyLarge)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("$tempo BPM", style = MaterialTheme.typography.bodyLarge)
+                                TextButton(
+                                    onClick = { onRemove(key) },
+                                    contentPadding = PaddingValues(horizontal = 6.dp),
+                                ) { Text("✕") }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = { onCapture(!state.capturingBpmKey) },
+                        border = if (state.capturingBpmKey) {
+                            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                        } else {
+                            ButtonDefaults.outlinedButtonBorder()
+                        },
+                    ) {
+                        Text(
+                            when {
+                                state.capturingBpmKey -> "Taste drücken…"
+                                draft != null -> "⇧ ${KeyBindings.keyLabel(draft)}"
+                                else -> "Taste wählen"
+                            },
+                        )
+                    }
+                    OutlinedTextField(
+                        value = bpmText,
+                        onValueChange = { text -> bpmText = text.filter(Char::isDigit).take(3) },
+                        modifier = Modifier
+                            .width(110.dp)
+                            .onFocusChanged { onTextFieldFocused(it.isFocused) },
+                        singleLine = true,
+                        label = { Text("BPM") },
+                    )
+                    Button(
+                        onClick = {
+                            if (draft != null && bpm != null) {
+                                onPut(draft, bpm)
+                                bpmText = ""
+                            }
+                        },
+                        enabled = draft != null && bpm != null,
+                    ) { Text("Hinzufügen") }
+                }
+                if (bpmText.isNotBlank() && bpm == null) {
+                    Text(
+                        "Tempo ${TransportViewModel.MIN_BPM}–${TransportViewModel.MAX_BPM} BPM",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fertig") }
         },
     )
 }

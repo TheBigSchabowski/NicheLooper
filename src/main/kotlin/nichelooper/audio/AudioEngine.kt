@@ -159,6 +159,22 @@ object AudioEngine {
     /** Playback volume of the loop track (recording stays full-scale). */
     fun setLoopVolume(volume: Float) = nativeSetLoopVolume(volume)
 
+    /**
+     * Builds a version of the loop with the click/drums the mic picked up from the speakers gated
+     * out (one-shot mode, built-in mic). The original stays; [setDrumFilter] switches between
+     * them. Takes a moment — call off the UI thread. False when there was nothing to filter.
+     */
+    fun prepareDrumFilter(): Boolean = nativePrepareDrumFilter()
+
+    /** Plays (and saves) the drum-filtered loop when there is one. */
+    fun setDrumFilter(enabled: Boolean) = nativeSetDrumFilter(enabled)
+
+    /** A drum-filtered version exists for the current loop (dropped by a new take, Clear, Load). */
+    val isDrumFilterReady: Boolean get() = nativeIsDrumFilterReady()
+
+    /** Half a bar of input folded onto the loop start after a bar-line close; off for mic + speakers. */
+    fun setPostCloseFold(enabled: Boolean) = nativeSetPostCloseFold(enabled)
+
     /** Recording auto-closes after this many bars; 0 disables auto-loop. */
     fun setAutoLoopBars(bars: Int) = nativeSetAutoLoopBars(bars)
 
@@ -251,6 +267,10 @@ object AudioEngine {
     private external fun nativeSetRhythmVolume(volume: Float)
     private external fun nativeSetCountIn(enabled: Boolean)
     private external fun nativeSetLoopVolume(volume: Float)
+    private external fun nativeSetPostCloseFold(enabled: Boolean)
+    private external fun nativePrepareDrumFilter(): Boolean
+    private external fun nativeSetDrumFilter(enabled: Boolean)
+    private external fun nativeIsDrumFilterReady(): Boolean
     private external fun nativeSetAutoLoopBars(bars: Int)
     private external fun nativeSetDrumSamples(
         kick: FloatArray,

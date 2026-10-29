@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import nichelooper.platform.Platform
@@ -33,6 +34,8 @@ enum class KeyAction(
     CHAIN_2("chain_2", "Plugin-Chain 2", "Wechselt live auf Effektkette 2", Key.S),
     CHAIN_3("chain_3", "Plugin-Chain 3", "Wechselt live auf Effektkette 3", Key.D),
     DRUMS_MUTE("drums_mute", "Drums Mute", "Live Drop-out der Drums im Takt", Key.M),
+    LOOP_MUTE("loop_mute", "Loop Mute", "Schaltet den Loop stumm, er läuft im Takt weiter", Key.N),
+    DRUM_FILTER("drum_filter", "Drum-Filter", "Drums in der Aufnahme an/aus (Einmal-Modus übers Mikro)", Key.F),
     DRUMS_TOGGLE("drums_toggle", "Drums an/aus", "Schaltet die Drum-Begleitung an oder aus", Key.B),
     METRONOME_TOGGLE("metronome_toggle", "Metronom an/aus", "Schaltet den Klick an oder aus", Key.K),
     COUNT_IN_TOGGLE("count_in_toggle", "Count-in an/aus", "Schaltet den 2-Takt-Vorzähler an oder aus", Key.I),
@@ -264,10 +267,30 @@ object KeyNames {
 class ShortcutDispatcher(private val viewModel: TransportViewModel) {
     private val heldKeys = mutableSetOf<Key>()
 
+    // A key that already did its job (command key, Shift+tempo key, captured key): its
+    // auto-repeat and release must not also trigger the plain binding.
+    private var swallowUntilRelease: Key? = null
+
     fun onPreviewKeyEvent(event: KeyEvent): Boolean {
         val state = viewModel.uiState.value
 
-        // 1. If a text field inside NicheLooper has focus (e.g. typing a preset name),
+        if (event.key == swallowUntilRelease) {
+            if (event.type == KeyEventType.KeyUp) swallowUntilRelease = null
+            return true
+        }
+
+        // 1. The BPM-Tasten dialog is waiting for the key to store a tempo on. Comes before the
+        // text-field check: the BPM field next to the button may still hold the focus.
+        if (state.capturingBpmKey) {
+            if (KeyNames.isModifier(event.key)) return false
+            if (event.type == KeyEventType.KeyDown) {
+                if (event.key == Key.Escape) viewModel.setCapturingBpmKey(false) else viewModel.pickBpmKey(event.key)
+                swallowUntilRelease = event.key
+            }
+            return true
+        }
+
+        // 2. If a text field inside NicheLooper has focus (e.g. typing a preset name),
         // never intercept keys so Spacebar and letters type into the text field.
         if (state.textFieldFocused) {
             if (event.type == KeyEventType.KeyUp) {
@@ -276,7 +299,7 @@ class ShortcutDispatcher(private val viewModel: TransportViewModel) {
             return false
         }
 
-        // 2. If the user is currently assigning a key in the Tasten dialog:
+        // 3. If the user is currently assigning a key in the Tasten dialog:
         val target = state.capturingKeyFor
         if (target != null) {
             if (KeyNames.isModifier(event.key)) return false
@@ -296,12 +319,32 @@ class ShortcutDispatcher(private val viewModel: TransportViewModel) {
             return false
         }
 
-        // 3. Do not intercept system shortcuts with Ctrl / Alt / Cmd.
+        // 4. Command mode: Ctrl+B, then a command key (L = looper mode, V = BPM keys).
+        if (state.commandMode && event.type == KeyEventType.KeyDown && !KeyNames.isModifier(event.key)) {
+            if (event.key == Key.Escape) viewModel.cancelCommandMode() else viewModel.runCommand(event.key)
+            swallowUntilRelease = event.key
+            return true
+        }
+        if (event.key == Key.B && event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed &&
+            event.type == KeyEventType.KeyDown
+        ) {
+            viewModel.enterCommandMode()
+            swallowUntilRelease = event.key
+            return true
+        }
+
+        // 5. Do not intercept system shortcuts with Ctrl / Alt / Cmd.
         if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) {
             return false
         }
 
-        // 4. Check if this key is bound to a looper action.
+        // 6. Shift + key with a stored tempo jumps to it (BPM-Tasten).
+        if (event.isShiftPressed && event.type == KeyEventType.KeyDown && viewModel.applyBpmKey(event.key)) {
+            swallowUntilRelease = event.key
+            return true
+        }
+
+        // 7. Check if this key is bound to a looper action.
         val action = state.keyBindings.actionFor(event.key) ?: return false
 
         return when (event.type) {

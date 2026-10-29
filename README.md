@@ -25,7 +25,7 @@ oder JACK unter Linux) über JNI.
    bleiben, ohne dass macOS erneut fragt — siehe „Fehlerbehebung“.
 4. Input/Output-Gerät wählen, **START ENGINE** — loslegen.
 
-> Aktuelle Version: [**NicheLooper 1.2.0**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.2.0)
+> Aktuelle Version: [**NicheLooper 1.3.0**](https://github.com/TheBigSchabowski/NicheLooper/releases/tag/v1.3.0)
 > — Builds für **macOS (`.dmg`)**, **Linux (`.deb` / `.tar.gz`)**, **Windows (`.msi`)** und **Android (`.apk`)** direkt von der Releases-Seite laden.
 
 ### Linux
@@ -166,7 +166,7 @@ Amp-Sound auf; Umschalten ändert nur den Live-Sound, nie fertige Loops.
   Nicht getestet sind kommerzielle Plugins (NAM, TONEX, Neural DSP …) und die
   Tastatureingabe in Plugin-Fenstern.
 - **Tastenbelegung („Tasten“):** Über den Button **Tasten** oben rechts lassen sich
-  alle 18 Tastenkürzel frei konfigurieren (inkl. USB-/Bluetooth-Fußschalter) und
+  alle 20 Tastenkürzel frei konfigurieren (inkl. USB-/Bluetooth-Fußschalter) und
   dauerhaft speichern:
   - **`Leertaste`** — **Stop / Record** (startet Aufnahme bei leerem/gestopptem Loop, stoppt Wiedergabe/Aufnahme bei laufendem Loop)
   - **`R`** — Record / Set Loop / Re-Rec
@@ -177,12 +177,36 @@ Amp-Sound auf; Umschalten ändert nur den Live-Sound, nie fertige Loops.
   - **`U`** — Loop speichern
   - **`A` / `S` / `D`** — Plugin-Chain 1 / 2 / 3
   - **`M`** — Drums Mute (Live Drop-out im Takt)
+  - **`N`** — Loop Mute (Loop stumm, läuft im Takt weiter; auch Knopf **MUTE** neben OVERDUB)
+  - **`F`** — Drum-Filter an/aus (Einmal-Modus: mitaufgenommene Drums raus oder drin)
   - **`B`** — Drums an/aus
   - **`K`** — Metronom an/aus
   - **`I`** — Count-in an/aus
   - **`L`** — Auto-Loop an/aus
   - **`V`** — Monitor Input an/aus
   - **`↓` / `↑`** — BPM −1 / +1
+  - **Befehlsmodus `Ctrl+B`**, danach eine Befehlstaste (oben erscheint ein Banner; Esc oder 4 s
+    warten bricht ab):
+    - **`L`** — Looper-Modus wechseln: **Normal** (REC auf einen Loop nimmt neu auf) oder
+      **Einmal-Aufnahme** (einmal aufnehmen, danach starten/stoppen REC, `R` und Leertaste den
+      Loop nur noch — neu aufnehmen erst nach CLEAR; Overdub bleibt auf `O`). Bis der Loop steht,
+      verhält sich alles wie im normalen Modus: Count-in, Auto-Loop (4/6/8 Takte) und das Schließen
+      der Aufnahme. Gedacht fürs Loopen ohne Interface, z. B. Akustikgitarre vor dem Mac-Mikrofon:
+      Der Eingang wird nur aufgenommen, nie mitgehört („Monitor input“ ist in dem Modus aus), und
+      nach dem Schließen wird nichts nachgefaltet — so gibt es über die Lautsprecher keine
+      Rückkopplung. Klick und Drums, die das Mikro aus den Lautsprechern mithört, filtert ein
+      **Drum-Gate** heraus (Knopf unter OVERDUB oder Taste **`F`**, an/aus jederzeit — manchmal
+      klingen die mitaufgenommenen Drums ja auch gut): Nach dem Schließen baut die App eine zweite
+      Fassung des Loops, in der jedes Frequenzband alle ~10 ms dort abgesenkt wird, wo gerade Drums
+      aus dem Lautsprecher kamen (die App weiß, was sie gespielt hat). Das arbeitet mit Pegeln statt
+      exakten Wellenformen und verträgt so, dass Mikro und Lautsprecher getrennte Geräte mit leicht
+      unterschiedlichem Takt sind. Umschalten blendet weich über; SAVE speichert die gerade gehörte
+      Fassung; Overdubs landen in beiden. Eigenes C++ ohne Plattform-Schnittstellen
+      (`native/DrumGate.cpp`), also auch für Linux und Android. Overdub nimmt den laufenden Loop weiterhin
+      mit auf (dafür Kopfhörer). Auch per Schalter unter dem REC-Button.
+    - **`V`** — BPM-Tasten: Taste wählen, Tempo eintragen. Danach setzt **⇧ + Taste** das Tempo sofort
+      (z. B. ⇧ N → 99 BPM, braucht laufende Engine). Gespeichert in `bpm-keys.properties` neben der
+      Tastenbelegung; auch über „BPM-Tasten“ in der Rhythm-Karte erreichbar.
   Die Tasten greifen nur im Hauptfenster und wenn kein Textfeld den Fokus hat —
   in geöffneten VST3-/AU-Plugin-Fenstern (z. B. beim Tippen der Leertaste in einem
   Plugin-Suchfeld wie TONE3000) gehen alle Tasten direkt ans Plugin.

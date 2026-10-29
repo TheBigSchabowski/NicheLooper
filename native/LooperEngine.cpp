@@ -1,12 +1,25 @@
 #include "LooperEngine.h"
 
+#include "DrumGate.h"
+
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 void LooperEngine::prepare(int32_t sampleRate, int32_t maxLoopSeconds) {
     mMaxFrames = sampleRate * maxLoopSeconds;
     mBuffer.assign(static_cast<size_t>(mMaxFrames), 0.0f);
+    mCleanBuffer.assign(static_cast<size_t>(mMaxFrames), 0.0f);
+    mCleanReady.store(false, std::memory_order_relaxed);
+    mCleanMixNow = 0.0f;
+    mRefBuffer.assign(static_cast<size_t>(mMaxFrames), 0.0f);
+    // Half a second covers output + input latency + air, phones included.
+    mHistory.assign(static_cast<size_t>(sampleRate / 2), 0.0f);
+    mRefPre.assign(mHistory.size(), 0.0f);
+    mHistoryPos = 0;
+    mTakePending = false;
+    mSampleRate = sampleRate;
     mLoopLength = 0;
     mPosition = 0;
     mCountInPos = 0;
@@ -17,6 +30,9 @@ void LooperEngine::prepare(int32_t sampleRate, int32_t maxLoopSeconds) {
     mPendingClose = 0;
     mFoldRemaining = 0;
     mSyncRecording = false;
+    // One-pole glide with a ~5 ms time constant.
+    mLoopGainCoeff = 1.0f - std::exp(-1.0f / (0.005f * static_cast<float>(sampleRate)));
+    mLoopGainNow = mLoopGain.load(std::memory_order_relaxed);
     mRhythm.prepare(sampleRate);
     mSharedPosition.store(0, std::memory_order_relaxed);
     mSharedLoopLength.store(0, std::memory_order_relaxed);
@@ -29,7 +45,10 @@ int32_t LooperEngine::copyLoop(float* dest, int32_t maxSamples) const {
     if (n <= 0) {
         return 0;
     }
-    std::copy_n(mBuffer.data(), n, dest);
+    // Save what is heard: the filtered version while the drum filter is on.
+    const bool clean = mCleanReady.load(std::memory_order_acquire) &&
+                       mDrumFilterOn.load(std::memory_order_relaxed);
+    std::copy_n(clean ? mCleanBuffer.data() : mBuffer.data(), n, dest);
     return n;
 }
 
@@ -57,6 +76,51 @@ bool LooperEngine::loadLoop(const float* data, int32_t numSamples) {
     std::copy_n(data, numSamples, mBuffer.begin());
     mPendingLoadLength.store(numSamples, std::memory_order_release);
     sendCommand(LooperCommand::Load);
+    return true;
+}
+
+bool LooperEngine::prepareDrumFilter() {
+    const LooperState s = state();
+    if (s != LooperState::Playing && s != LooperState::Stopped &&
+        s != LooperState::Overdubbing) {
+        return false;
+    }
+    const int32_t take = mTake.load(std::memory_order_acquire);
+    const int32_t length = loopLengthFrames();
+    const auto pre = static_cast<int32_t>(mRefPre.size());
+    if (length <= 0) {
+        return false;
+    }
+    const auto unchanged = [&] {
+        return mTake.load(std::memory_order_acquire) == take && loopLengthFrames() == length &&
+               state() != LooperState::Empty;
+    };
+
+    std::vector<float> recorded(mBuffer.begin(), mBuffer.begin() + length);
+    std::vector<float> ref(static_cast<size_t>(pre) + length);
+    std::copy(mRefPre.begin(), mRefPre.end(), ref.begin());
+    std::copy_n(mRefBuffer.begin(), length, ref.begin() + pre);
+    const std::vector<float> clean =
+            drum_gate::apply(recorded.data(), length, ref.data(), pre, mSampleRate);
+    if (clean.empty() || !unchanged()) {
+        return false;
+    }
+
+    // The audio thread leaves mCleanBuffer alone until mCleanReady. An
+    // overdub since the snapshot only added to mBuffer: carry it over.
+    for (int32_t n = 0; n < length; ++n) {
+        mCleanBuffer[n] = std::clamp(clean[n] + (mBuffer[n] - recorded[n]), -1.0f, 1.0f);
+    }
+    if (!unchanged()) {
+        return false;
+    }
+    mCleanReady.store(true, std::memory_order_release);
+    if (!unchanged()) {
+        // A new take started in between; its start already dropped the flag
+        // or will — make sure the stale version is never played.
+        mCleanReady.store(false, std::memory_order_release);
+        return false;
+    }
     return true;
 }
 
@@ -94,6 +158,7 @@ void LooperEngine::finalizeLoopQuantized(const RhythmParams& rp) {
         const int32_t overhang = mPosition - length;
         for (int32_t k = 0; k < overhang; ++k) {
             mBuffer[k] = std::clamp(mBuffer[k] + mBuffer[length + k], -1.0f, 1.0f);
+            mRefBuffer[k] += mRefBuffer[length + k];
         }
         mLoopLength = length;
         mSharedLoopLength.store(length, std::memory_order_relaxed);
@@ -126,6 +191,7 @@ void LooperEngine::startRecording(const RhythmParams& rp) {
 
     // Replaces any existing loop. No buffer wipe needed — recording
     // overwrites and playback never reads past mLoopLength.
+    mCleanReady.store(false, std::memory_order_release);
     mLoopLength = 0;
     mSharedLoopLength.store(0, std::memory_order_relaxed);
     mPosition = 0;
@@ -162,6 +228,7 @@ void LooperEngine::startRecording(const RhythmParams& rp) {
     } else {
         mSyncRecording = rp.metronome || rp.drums;
         armAutoClose(rp);
+        mTakePending = true;
         setState(LooperState::Recording);
     }
 }
@@ -235,6 +302,7 @@ void LooperEngine::applyCommand(LooperCommand command, const RhythmParams& rp) {
             mFreeClock = 0;  // metronome/drums restart on beat 1
             break;
         case LooperCommand::Clear:
+            mCleanReady.store(false, std::memory_order_release);
             mLoopLength = 0;
             mSharedLoopLength.store(0, std::memory_order_relaxed);
             mPosition = 0;
@@ -245,6 +313,7 @@ void LooperEngine::applyCommand(LooperCommand command, const RhythmParams& rp) {
         case LooperCommand::Load:
             // Buffer contents were written by the app thread while the
             // machine was parked in Empty (see loadLoop()).
+            mCleanReady.store(false, std::memory_order_release);
             mLoopLength = mPendingLoadLength.load(std::memory_order_acquire);
             mSharedLoopLength.store(mLoopLength, std::memory_order_relaxed);
             mPosition = 0;
@@ -266,14 +335,42 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
     }
 
     const bool clockWanted = rp.metronome || rp.drums;
-    const float loopGain = mLoopGain.load(std::memory_order_relaxed);
+    const float loopGainTarget = mLoopGain.load(std::memory_order_relaxed);
+    // Drum filter: crossfade towards the filtered loop while it is on. Without
+    // a valid filtered version, play the original at once (it may be stale).
+    const bool cleanReady = mCleanReady.load(std::memory_order_acquire);
+    const float cleanTarget =
+            cleanReady && mDrumFilterOn.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    if (!cleanReady) {
+        mCleanMixNow = 0.0f;
+    }
     LooperState s = state();
     for (int32_t i = 0; i < numFrames; ++i) {
+        // Snap when close, so a glide to 0 never decays into denormals.
+        const float gainDiff = loopGainTarget - mLoopGainNow;
+        mLoopGainNow = std::fabs(gainDiff) < 1e-5f ? loopGainTarget
+                                                   : mLoopGainNow + gainDiff * mLoopGainCoeff;
+        const float loopGain = mLoopGainNow;
+        const float cleanDiff = cleanTarget - mCleanMixNow;
+        mCleanMixNow = std::fabs(cleanDiff) < 1e-5f ? cleanTarget
+                                                    : mCleanMixNow + cleanDiff * mLoopGainCoeff;
         // Bar phase for this frame; -1 = no rhythm clock running.
         int32_t phase = -1;
+        // Take position recorded this frame (its speaker output is stored there); -1 = none.
+        int32_t refIndex = -1;
         bool clicks = rp.metronome;
         switch (s) {
             case LooperState::Recording:
+                if (mTakePending) {
+                    // Speaker history up to the frame before the take, oldest first.
+                    const size_t h = mHistory.size();
+                    for (size_t k = 0; k < h; ++k) {
+                        mRefPre[k] = mHistory[(mHistoryPos + k) % h];
+                    }
+                    mTakePending = false;
+                    mTake.fetch_add(1, std::memory_order_release);
+                }
+                refIndex = mPosition;
                 mBuffer[mPosition] = input[i];
                 output[i] = 0.0f;
                 // Recording always starts on beat 1, so the record head IS
@@ -290,7 +387,9 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
                     mSharedLoopLength.store(mLoopLength, std::memory_order_relaxed);
                     mPosition = 0;
                     mPendingClose = 0;
-                    mFoldRemaining = std::min(rp.framesPerBar / 2, mLoopLength);
+                    mFoldRemaining = mFoldEnabled.load(std::memory_order_relaxed)
+                            ? std::min(rp.framesPerBar / 2, mLoopLength)
+                            : 0;
                     setState(LooperState::Playing);
                     s = LooperState::Playing;
                 } else if (mPosition >= mMaxFrames) {
@@ -300,7 +399,7 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
                 }
                 break;
             case LooperState::Playing:
-                output[i] = mBuffer[mPosition] * loopGain;
+                output[i] = playbackSample(mPosition) * loopGain;
                 if (mFoldRemaining > 0) {
                     // Post-close fold: overdub-style write of the input that
                     // is still sounding after a bar-line close. Runs from the
@@ -318,9 +417,13 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
                 break;
             case LooperState::Overdubbing: {
                 const float existing = mBuffer[mPosition];
-                output[i] = existing * loopGain;
+                output[i] = playbackSample(mPosition) * loopGain;
                 // Hard limit so repeated overdubs cannot blow up the buffer.
                 mBuffer[mPosition] = std::clamp(existing + input[i], -1.0f, 1.0f);
+                if (cleanReady) {
+                    mCleanBuffer[mPosition] =
+                            std::clamp(mCleanBuffer[mPosition] + input[i], -1.0f, 1.0f);
+                }
                 if (clockWanted && rp.framesPerBar > 0) {
                     phase = mPosition % rp.framesPerBar;
                 }
@@ -346,6 +449,7 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
                     mSyncRecording = true;
                     mPendingClose = 0;
                     armAutoClose(rp);
+                    mTakePending = true;
                     setState(LooperState::Recording);
                     s = LooperState::Recording;
                 }
@@ -372,6 +476,16 @@ void LooperEngine::process(const float* input, float* output, int32_t numFrames)
             mRhythm.resetStepTracking();
         }
         output[i] += mRhythm.render();
+
+        if (refIndex >= 0) {
+            mRefBuffer[refIndex] = output[i];
+        }
+        if (!mHistory.empty()) {
+            mHistory[mHistoryPos] = output[i];
+            if (++mHistoryPos >= static_cast<int32_t>(mHistory.size())) {
+                mHistoryPos = 0;
+            }
+        }
     }
 
     // During count-in the UI shows the beat within the bar, so share the

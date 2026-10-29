@@ -70,6 +70,7 @@ if (onMac) {
         val jniHome = findJniHome()
         val sources = listOf(
             "LooperEngine.cpp",
+            "DrumGate.cpp",
             "RhythmSection.cpp",
             "MacAudioEngine.cpp",
             "AuPluginChain.mm",
@@ -105,6 +106,7 @@ if (onMac) {
     val vst3SdkDir = file("third_party/vst3sdk")
     val linuxSources = listOf(
         "LooperEngine.cpp",
+        "DrumGate.cpp",
         "RhythmSection.cpp",
         "LinuxAudioEngine.cpp",
         "LinuxVstPluginChain.cpp",
@@ -245,7 +247,7 @@ compose.desktop {
             // Each format can only be built on its own operating system: the DMG on the Mac, the DEB on Linux.
             targetFormats(TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "NicheLooper"
-            packageVersion = "1.2.0"
+            packageVersion = "1.3.0"
             description = "Live-Looper mit Metronom, Drums und Plugin-Effektketten für Gitarre"
             vendor = "TheBigSchabowski"
             // The AAC decoder (jaad) logs through java.logging; jpackage only bundles what it is told to.

@@ -89,6 +89,21 @@ public:
     // serialize against prepare().
     bool loadLoop(const float* data, int32_t numSamples);
 
+    // App thread, after a take closed: builds a second version of the loop
+    // with the click/drums the mic picked up from the speakers gated out
+    // (DrumGate.h). The original stays; setDrumFilterEnabled() switches
+    // between the two with a short crossfade, and overdubs go onto both.
+    // Returns false when there was nothing to filter or the loop changed
+    // meanwhile. A new take, Clear or Load drops the filtered version. The
+    // caller must serialize against prepare().
+    bool prepareDrumFilter();
+
+    // Plays (and saves) the filtered version once there is one.
+    void setDrumFilterEnabled(bool enabled) {
+        mDrumFilterOn.store(enabled, std::memory_order_relaxed);
+    }
+    bool drumFilterReady() const { return mCleanReady.load(std::memory_order_acquire); }
+
     RhythmSection& rhythm() { return mRhythm; }
 
     void setCountInEnabled(bool enabled) {
@@ -96,8 +111,16 @@ public:
     }
 
     // Playback volume of the loop track only (recording stays full-scale so
-    // the loop content itself is not attenuated).
+    // the loop content itself is not attenuated). Changes glide over a few ms,
+    // so muting the loop mid-phrase (gain 0) does not click.
     void setLoopGain(float gain) { mLoopGain.store(gain, std::memory_order_relaxed); }
+
+    // Post-close fold (see class comment). Off for looping through a room
+    // mic and speakers: there the mic also hears the loop restarting, and the
+    // fold would lay that onto the loop start a second time.
+    void setPostCloseFoldEnabled(bool enabled) {
+        mFoldEnabled.store(enabled, std::memory_order_relaxed);
+    }
 
     // > 0: recording auto-closes after that many bars; 0 = off.
     void setAutoLoopBars(int32_t bars) {
@@ -117,11 +140,28 @@ private:
     void armAutoClose(const RhythmParams& rp);
     void finalizeLoop();
     void finalizeLoopQuantized(const RhythmParams& rp);
+    // Loop sample at pos as heard: original, filtered, or the crossfade between.
+    float playbackSample(int32_t pos) const {
+        const float original = mBuffer[pos];
+        return mCleanMixNow > 0.0f ? original + (mCleanBuffer[pos] - original) * mCleanMixNow
+                                   : original;
+    }
     void setState(LooperState state) {
         mState.store(static_cast<int32_t>(state), std::memory_order_relaxed);
     }
 
     std::vector<float> mBuffer;      // mono samples, allocated in prepare()
+    std::vector<float> mCleanBuffer; // mBuffer with the drums gated out, valid while mCleanReady
+    float mCleanMixNow = 0.0f;       // audio thread only, 0 = original, 1 = filtered
+    // What went to the speakers, for prepareDrumFilter(). mRefBuffer runs
+    // alongside mBuffer during a take; mHistory is a ring of the most recent
+    // output, copied to mRefPre when a take starts (the mic hears it late).
+    std::vector<float> mRefBuffer;
+    std::vector<float> mHistory;
+    std::vector<float> mRefPre;
+    int32_t mHistoryPos = 0;         // audio thread only
+    bool mTakePending = false;       // audio thread only, snapshot history on 1st frame
+    int32_t mSampleRate = 0;
     int32_t mMaxFrames = 0;
     int32_t mLoopLength = 0;         // audio thread only
     int32_t mPosition = 0;           // audio thread only
@@ -134,6 +174,8 @@ private:
     int32_t mFoldRemaining = 0;      // audio thread only, post-close input frames
                                      // still folded onto the loop start
     bool mSyncRecording = false;     // audio thread only, quantize this recording
+    float mLoopGainNow = 1.0f;       // audio thread only, smoothed mLoopGain
+    float mLoopGainCoeff = 1.0f;     // audio thread only, per-frame glide factor
 
     RhythmSection mRhythm;
 
@@ -145,4 +187,8 @@ private:
     std::atomic<bool> mCountInEnabled{false};
     std::atomic<float> mLoopGain{1.0f};
     std::atomic<int32_t> mAutoLoopBars{0};
+    std::atomic<bool> mFoldEnabled{true};
+    std::atomic<int32_t> mTake{0};   // counts takes, so prepareDrumFilter() notices a new one
+    std::atomic<bool> mCleanReady{false};
+    std::atomic<bool> mDrumFilterOn{true};
 };

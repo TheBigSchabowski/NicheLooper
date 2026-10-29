@@ -4,6 +4,7 @@ import androidx.compose.ui.input.key.Key
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -23,6 +24,19 @@ import nichelooper.audio.LooperState
 import nichelooper.audio.RhythmTables
 import nichelooper.audio.SavedLoop
 import nichelooper.platform.Platform
+
+/**
+ * How the REC button (and its keys) treats an existing loop.
+ * - [NORMAL]: REC on a loop records a new take over it (RE-REC).
+ * - [ONE_SHOT]: as in Widder — record once, after that REC only starts and stops the loop;
+ *   a new take needs CLEAR first. Overdub stays available on its own key. Made for looping an
+ *   acoustic guitar through the built-in mic and speakers: the input is only recorded, never
+ *   monitored, so nothing can feed back.
+ */
+enum class LoopMode(val title: String) {
+    NORMAL("Normal"),
+    ONE_SHOT("Einmal-Aufnahme"),
+}
 
 data class TransportUiState(
     val inputDevices: List<String> = emptyList(),
@@ -53,6 +67,7 @@ data class TransportUiState(
     val countInEnabled: Boolean = false,
     val rhythmVolume: Float = 1f,
     val loopVolume: Float = 1f,
+    val loopMuted: Boolean = false,
     val autoLoopEnabled: Boolean = false,
     val autoLoopBars: Int = 4,           // 4, 6 or 8
     val inputPeak: Float = 0f,
@@ -67,6 +82,14 @@ data class TransportUiState(
     val keyBindings: KeyBindings = KeyBindings(),
     val capturingKeyFor: KeyAction? = null,
     val textFieldFocused: Boolean = false,
+    val loopMode: LoopMode = LoopMode.NORMAL,
+    val drumFilterOn: Boolean = true,       // play the drum-filtered take when there is one
+    val drumFilterReady: Boolean = false,   // a drum-filtered version of the loop exists
+    val commandMode: Boolean = false,    // Ctrl+B pressed, waiting for the command key
+    val bpmKeys: BpmKeys = BpmKeys(),
+    val bpmKeysDialogOpen: Boolean = false,
+    val capturingBpmKey: Boolean = false,
+    val bpmKeyDraft: Key? = null,        // key picked in the BPM-Tasten dialog, not yet saved
 )
 
 /**
@@ -117,7 +140,8 @@ class TransportViewModel {
         // Load user-configured keyboard shortcuts.
         scope.launch(Dispatchers.IO) {
             val loaded = KeyBindingsStore.load()
-            _uiState.update { it.copy(keyBindings = loaded) }
+            val bpmKeys = BpmKeysStore.load()
+            _uiState.update { it.copy(keyBindings = loaded, bpmKeys = bpmKeys) }
         }
 
         // Poll the engine for playhead/state; also catches disconnects
@@ -129,12 +153,21 @@ class TransportViewModel {
                 if (AudioEngine.isDisconnected || !AudioEngine.isRunning) {
                     stopEngine("Audio device stopped (unplugged or reconfigured). Press Start to restart.")
                 } else {
+                    val previous = _uiState.value.looperState
+                    val current = AudioEngine.looperState
+                    if (previous == LooperState.RECORDING &&
+                        (current == LooperState.PLAYING || current == LooperState.STOPPED)
+                    ) {
+                        onTakeClosed()
+                    }
                     val inPeak = AudioEngine.readInputPeak()
                     val fxPeak = AudioEngine.readFxPeak()
                     val outPeak = AudioEngine.readOutputPeak()
                     _uiState.update {
                         it.copy(
-                            looperState = AudioEngine.looperState,
+                            looperState = current,
+                            // A new take, Clear or Load drops the filtered version.
+                            drumFilterReady = it.drumFilterReady && AudioEngine.isDrumFilterReady,
                             positionFrames = AudioEngine.positionFrames,
                             loopLengthFrames = AudioEngine.loopLengthFrames,
                             // simple meter ballistics: instant attack, ~0.25s release
@@ -194,7 +227,7 @@ class TransportViewModel {
                 if (ok) {
                     // Re-apply UI-side settings to the fresh engine.
                     val s = _uiState.value
-                    AudioEngine.setMonitor(s.monitorEnabled)
+                    applyLoopMode(s)
                     AudioEngine.setInputGain(s.inputGain)
                     AudioEngine.setOutputGain(s.outputGain)
                     AudioEngine.setBpm(s.bpm)
@@ -205,11 +238,13 @@ class TransportViewModel {
                     AudioEngine.setGroove(s.groove)
                     AudioEngine.setCountIn(s.countInEnabled)
                     AudioEngine.setRhythmVolume(s.rhythmVolume)
-                    AudioEngine.setLoopVolume(s.loopVolume)
+                    AudioEngine.setLoopVolume(if (s.loopMuted) 0f else s.loopVolume)
+                    AudioEngine.setDrumFilter(s.drumFilterOn)
                     AudioEngine.setAutoLoopBars(if (s.autoLoopEnabled) s.autoLoopBars else 0)
                     _uiState.update {
                         it.copy(
                             engineRunning = true,
+                            drumFilterReady = false,
                             looperState = LooperState.EMPTY,
                             positionFrames = 0,
                             loopLengthFrames = 0,
@@ -244,6 +279,7 @@ class TransportViewModel {
             _uiState.update {
                 it.copy(
                     engineRunning = false,
+                    drumFilterReady = false,
                     looperState = LooperState.EMPTY,
                     positionFrames = 0,
                     loopLengthFrames = 0,
@@ -471,6 +507,142 @@ class TransportViewModel {
         }
     }
 
+    /** The REC button and the Record key: depends on [LoopMode]. */
+    fun recordButton() {
+        if (_uiState.value.loopMode == LoopMode.ONE_SHOT) oneShotStep(::record) else record()
+    }
+
+    /**
+     * One-shot step (REC button, R and Space in [LoopMode.ONE_SHOT]). Until there is a loop it
+     * does exactly what [normal] does in the normal mode — count-in, auto-loop and the way a
+     * recording is closed stay the same. With a loop: PLAYING → stop, STOPPED → play; it never
+     * records over it.
+     */
+    private fun oneShotStep(normal: () -> Unit) {
+        val s = _uiState.value
+        if (!s.engineRunning) return
+        when (s.looperState) {
+            LooperState.EMPTY, LooperState.COUNT_IN, LooperState.RECORDING -> normal()
+            LooperState.STOPPED -> play()
+            LooperState.PLAYING, LooperState.OVERDUBBING -> stopLoop()
+        }
+    }
+
+    /**
+     * In one-shot mode the mic also heard the click and drums from the speakers. Build the
+     * drum-filtered version of the fresh take; [toggleDrumFilter] (F) then switches between it
+     * and the original. Runs while the loop already plays.
+     */
+    private fun onTakeClosed() {
+        val s = _uiState.value
+        if (s.loopMode != LoopMode.ONE_SHOT) return
+        if (!s.metronomeEnabled && !s.drumsEnabled && !s.countInEnabled) return
+        scope.launch {
+            val ok = AudioEngine.prepareDrumFilter()
+            _uiState.update {
+                it.copy(
+                    drumFilterReady = ok,
+                    saveMessage = if (ok) {
+                        "Drum-Filter bereit — ${it.keyBindings.shortLabelFor(KeyAction.DRUM_FILTER) ?: "Knopf"} " +
+                            "schaltet die Drums im Loop an/aus"
+                    } else {
+                        "Drum-Filter: keine Drums in der Aufnahme gefunden"
+                    },
+                )
+            }
+        }
+    }
+
+    /** Drums in the loop on/off: plays the original take or the drum-filtered one. */
+    fun toggleDrumFilter() {
+        val on = !_uiState.value.drumFilterOn
+        AudioEngine.setDrumFilter(on)
+        _uiState.update { it.copy(drumFilterOn = on) }
+    }
+
+    fun setLoopMode(mode: LoopMode) {
+        _uiState.update { it.copy(loopMode = mode) }
+        applyLoopMode(_uiState.value)
+    }
+
+    /** Monitoring and the post-close fold both feed the mic back to the speakers — off in one-shot mode. */
+    private fun applyLoopMode(s: TransportUiState) {
+        val room = s.loopMode == LoopMode.ONE_SHOT
+        AudioEngine.setMonitor(s.monitorEnabled && !room)
+        AudioEngine.setPostCloseFold(!room)
+    }
+
+    fun toggleLoopMode() = setLoopMode(
+        if (_uiState.value.loopMode == LoopMode.NORMAL) LoopMode.ONE_SHOT else LoopMode.NORMAL,
+    )
+
+    // ---- Command mode (Ctrl+B, then a command key) ----
+
+    private var commandTimeout: Job? = null
+
+    /** Ctrl+B: the next key is a command. Lapses after a few seconds so a forgotten prefix cannot eat a later key. */
+    fun enterCommandMode() {
+        commandTimeout?.cancel()
+        _uiState.update { it.copy(commandMode = true) }
+        commandTimeout = scope.launch {
+            delay(COMMAND_TIMEOUT_MS)
+            _uiState.update { it.copy(commandMode = false) }
+        }
+    }
+
+    fun cancelCommandMode() {
+        commandTimeout?.cancel()
+        _uiState.update { it.copy(commandMode = false) }
+    }
+
+    /** Runs the command for [key] after Ctrl+B. Unknown keys just end command mode. */
+    fun runCommand(key: Key) {
+        cancelCommandMode()
+        when (key) {
+            Key.L -> toggleLoopMode()
+            Key.V -> openBpmKeysDialog()
+            else -> {}
+        }
+    }
+
+    // ---- BPM keys (Shift + key = tempo) ----
+
+    /** Shift + [key]: jumps to the tempo stored for it. Returns false if the key has none. */
+    fun applyBpmKey(key: Key): Boolean {
+        val s = _uiState.value
+        val bpm = s.bpmKeys.bpmFor(key) ?: return false
+        if (s.engineRunning) setBpm(bpm)
+        return true
+    }
+
+    fun openBpmKeysDialog() {
+        _uiState.update { it.copy(bpmKeysDialogOpen = true, capturingBpmKey = false, bpmKeyDraft = null) }
+    }
+
+    fun closeBpmKeysDialog() {
+        _uiState.update { it.copy(bpmKeysDialogOpen = false, capturingBpmKey = false, bpmKeyDraft = null) }
+    }
+
+    fun setCapturingBpmKey(capturing: Boolean) {
+        _uiState.update { it.copy(capturingBpmKey = capturing) }
+    }
+
+    fun pickBpmKey(key: Key) {
+        _uiState.update { it.copy(bpmKeyDraft = key, capturingBpmKey = false) }
+    }
+
+    fun putBpmKey(key: Key, bpm: Int) {
+        val updated = _uiState.value.bpmKeys.with(key, bpm)
+        _uiState.update { it.copy(bpmKeys = updated, bpmKeyDraft = null) }
+        scope.launch(Dispatchers.IO) { BpmKeysStore.save(updated) }
+    }
+
+    fun removeBpmKey(key: Key) {
+        val updated = _uiState.value.bpmKeys.without(key)
+        _uiState.update { it.copy(bpmKeys = updated) }
+        scope.launch(Dispatchers.IO) { BpmKeysStore.save(updated) }
+    }
+
     fun playOrStop() {
         val s = _uiState.value
         if (!s.engineRunning) return
@@ -505,8 +677,8 @@ class TransportViewModel {
     fun performKeyAction(action: KeyAction) {
         val s = _uiState.value
         when (action) {
-            KeyAction.REC_STOP -> recordOrStop()
-            KeyAction.RECORD -> if (s.engineRunning && s.looperState != LooperState.COUNT_IN) record()
+            KeyAction.REC_STOP -> if (s.loopMode == LoopMode.ONE_SHOT) oneShotStep(::recordOrStop) else recordOrStop()
+            KeyAction.RECORD -> if (s.engineRunning && s.looperState != LooperState.COUNT_IN) recordButton()
             KeyAction.STOP -> if (s.engineRunning) stopLoop()
             KeyAction.PLAY_STOP -> playOrStop()
             KeyAction.OVERDUB -> if (s.engineRunning && s.loopLengthFrames > 0) toggleOverdub()
@@ -516,11 +688,14 @@ class TransportViewModel {
             KeyAction.CHAIN_2 -> setActiveChain(1)
             KeyAction.CHAIN_3 -> setActiveChain(2)
             KeyAction.DRUMS_MUTE -> toggleDrumsMute()
+            KeyAction.LOOP_MUTE -> toggleLoopMute()
+            KeyAction.DRUM_FILTER -> toggleDrumFilter()
             KeyAction.DRUMS_TOGGLE -> if (s.engineRunning) setDrums(!s.drumsEnabled)
             KeyAction.METRONOME_TOGGLE -> if (s.engineRunning) setMetronome(!s.metronomeEnabled)
             KeyAction.COUNT_IN_TOGGLE -> if (s.engineRunning) setCountIn(!s.countInEnabled)
             KeyAction.AUTO_LOOP_TOGGLE -> if (s.engineRunning) setAutoLoop(!s.autoLoopEnabled)
-            KeyAction.MONITOR_TOGGLE -> if (s.engineRunning) setMonitor(!s.monitorEnabled)
+            KeyAction.MONITOR_TOGGLE ->
+                if (s.engineRunning && s.loopMode == LoopMode.NORMAL) setMonitor(!s.monitorEnabled)
             KeyAction.BPM_DOWN -> if (s.engineRunning) setBpm(s.bpm - 1)
             KeyAction.BPM_UP -> if (s.engineRunning) setBpm(s.bpm + 1)
         }
@@ -546,9 +721,10 @@ class TransportViewModel {
         }
     }
 
+    /** The normal mode's monitor setting; one-shot mode keeps monitoring off regardless (see [applyLoopMode]). */
     fun setMonitor(enabled: Boolean) {
-        AudioEngine.setMonitor(enabled)
         _uiState.update { it.copy(monitorEnabled = enabled) }
+        applyLoopMode(_uiState.value)
     }
 
     fun setInputGain(gain: Float) {
@@ -617,8 +793,19 @@ class TransportViewModel {
     }
 
     fun setLoopVolume(volume: Float) {
-        AudioEngine.setLoopVolume(volume)
+        if (!_uiState.value.loopMuted) AudioEngine.setLoopVolume(volume)
         _uiState.update { it.copy(loopVolume = volume) }
+    }
+
+    /**
+     * Silences the loop but keeps it running (and the drums locked to it), so unmuting lands
+     * back in time — the loop's counterpart to [toggleDrumsMute]. Bound to N.
+     */
+    fun toggleLoopMute() {
+        val s = _uiState.value
+        val muted = !s.loopMuted
+        AudioEngine.setLoopVolume(if (muted) 0f else s.loopVolume)
+        _uiState.update { it.copy(loopMuted = muted) }
     }
 
     fun setAutoLoop(enabled: Boolean) {
@@ -643,6 +830,7 @@ class TransportViewModel {
     companion object {
         private const val POLL_MS = 50L
         private const val DEVICE_POLL_MS = 1500L
+        private const val COMMAND_TIMEOUT_MS = 4000L
         const val MIN_BPM = 40
         const val MAX_BPM = 240
         const val CHAIN_COUNT = 3

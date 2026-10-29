@@ -71,6 +71,16 @@ public:
         return mLooper.copyLoop(dest, maxSamples);
     }
 
+    // App thread: builds the drum-filtered loop (see
+    // LooperEngine::prepareDrumFilter). Serialized with start()/stop().
+    bool prepareDrumFilter() {
+        std::lock_guard<std::mutex> lock(mLock);
+        if (!isRunning()) {
+            return false;
+        }
+        return mLooper.prepareDrumFilter();
+    }
+
     // App thread: replace the loop with mono samples and start playback.
     bool loadLoop(const float* data, int32_t numSamples) {
         std::lock_guard<std::mutex> lock(mLock);
